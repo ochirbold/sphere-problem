@@ -1,0 +1,266 @@
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import List
+import numpy as np
+from scipy.optimize import linprog
+
+app = FastAPI(title="Sphere Packing CVP API")
+
+# ======================
+# DATA MODELS
+# ======================
+class Product(BaseModel):
+    p: float
+    c: float
+    xmin: float
+    xmax: float
+
+class VolumeRequest(BaseModel):
+    products: List[Product]
+    fixed_cost: float
+
+class PriceRequest(BaseModel):
+    avg_volume: List[float]
+    cost: List[float]
+    pmin: List[float]
+    pmax: List[float]
+    fixed_cost: float
+
+class CostRequest(BaseModel):
+    avg_volume: List[float]
+    avg_price: List[float]
+    cmin: List[float]
+    cmax: List[float]
+    fixed_cost: float
+
+class RobustRequest(BaseModel):
+    avg_volume: List[float]
+    pmin: List[float]
+    pmax: List[float]
+    cmin: List[float]
+    cmax: List[float]
+    fixed_cost: float
+    
+from typing import Dict, Any, Literal
+
+class OptimizeRequest(BaseModel):
+    case: Literal["volume", "price", "cost", "robust"]
+    data: Dict[str, Any]
+
+
+# ======================
+# CASE 1 – VOLUME
+# ======================
+# @app.post("/optimize/volume")
+def solve_volume(data):
+    products = data["products"]
+    F = data["fixed_cost"]
+
+    p = np.array([x["p"] for x in products])
+    c = np.array([x["c"] for x in products])
+    xmin = np.array([x["xmin"] for x in products])
+    xmax = np.array([x["xmax"] for x in products])
+
+    d = p - c
+    norm_d = np.linalg.norm(d)
+    n = len(d)
+
+    c_obj = np.zeros(n + 1)
+    c_obj[-1] = -1
+
+    A, b = [], []
+    A.append(np.hstack([-d, norm_d]))
+    b.append(-F)
+
+    for j in range(n):
+        row = np.zeros(n + 1)
+        row[j], row[-1] = -1, 1
+        A.append(row)
+        b.append(-xmin[j])
+
+        row = np.zeros(n + 1)
+        row[j], row[-1] = 1, 1
+        A.append(row)
+        b.append(xmax[j])
+
+    bounds = [(None, None)] * n + [(0, None)]
+    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=bounds, method="highs")
+
+    if not res.success:
+        return {"error": res.message}
+
+    x0, r = res.x[:-1], res.x[-1]
+
+    return {
+        "case": "volume",
+        "center": x0.tolist(),
+        "radius": float(r),
+        "safe_region": [
+            {"min": float(x0[i]-r), "max": float(x0[i]+r)}
+            for i in range(n)
+        ]
+    }
+
+
+
+# ======================
+# CASE 2 – PRICE
+# ======================
+# @app.post("/optimize/price")
+def solve_price(data):
+    x = np.array(data["avg_volume"])
+    c = np.array(data["cost"])
+    pmin = np.array(data["pmin"])
+    pmax = np.array(data["pmax"])
+    F = data["fixed_cost"]
+
+    n = len(x)
+    norm_x = np.linalg.norm(x)
+
+    c_obj = np.zeros(n + 1)
+    c_obj[-1] = -1
+
+    A = [np.hstack([-x, norm_x])]
+    b = [-(np.dot(c, x) + F)]
+
+    for j in range(n):
+        row = np.zeros(n + 1)
+        row[j], row[-1] = -1, 1
+        A.append(row)
+        b.append(-pmin[j])
+
+        row = np.zeros(n + 1)
+        row[j], row[-1] = 1, 1
+        A.append(row)
+        b.append(pmax[j])
+
+    bounds = [(None, None)] * n + [(0, None)]
+    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=bounds, method="highs")
+
+    if not res.success:
+        return {"error": res.message}
+
+    p0, r = res.x[:-1], res.x[-1]
+
+    return {
+        "case": "price",
+        "price_center": p0.tolist(),
+        "radius": float(r),
+        "safe_price_range": [
+            {"min": float(p0[i]-r/np.sqrt(n)), "max": float(p0[i]+r/np.sqrt(n))}
+            for i in range(n)
+        ]
+    }
+
+
+
+# ======================
+# CASE 3 – COST
+# ======================
+# @app.post("/optimize/cost")
+def solve_cost(data):
+    x = np.array(data["avg_volume"])
+    p = np.array(data["avg_price"])
+    cmin = np.array(data["cmin"])
+    cmax = np.array(data["cmax"])
+    F = data["fixed_cost"]
+
+    n = len(x)
+    norm_x = np.linalg.norm(x)
+
+    c_obj = np.zeros(n + 1)
+    c_obj[-1] = -1
+
+    A = [np.hstack([x, norm_x])]
+    b = [np.dot(p, x) - F]
+
+    for j in range(n):
+        row = np.zeros(n + 1)
+        row[j], row[-1] = -1, 1
+        A.append(row)
+        b.append(-cmin[j])
+
+        row = np.zeros(n + 1)
+        row[j], row[-1] = 1, 1
+        A.append(row)
+        b.append(cmax[j])
+
+    bounds = [(None, None)] * n + [(0, None)]
+    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=bounds, method="highs")
+
+    if not res.success:
+        return {"error": res.message}
+
+    c0, r = res.x[:-1], res.x[-1]
+
+    return {
+        "case": "cost",
+        "cost_center": c0.tolist(),
+        "radius": float(r),
+        "safe_cost_range": [
+            {"min": float(c0[i]-r/np.sqrt(n)), "max": float(c0[i]+r/np.sqrt(n))}
+            for i in range(n)
+        ]
+    }
+
+
+# ======================
+# CASE 4 – ROBUST (PRICE + COST)
+# ======================
+# @app.post("/optimize/robust")
+def solve_robust(data):
+    x = np.array(data["avg_volume"])
+    pmin, pmax = np.array(data["pmin"]), np.array(data["pmax"])
+    cmin, cmax = np.array(data["cmin"]), np.array(data["cmax"])
+    F = data["fixed_cost"]
+
+    n = len(x)
+    norm_x = np.linalg.norm(x)
+
+    c_obj = np.zeros(2*n + 1)
+    c_obj[-1] = -1
+
+    A = [np.hstack([x, -x, 2*norm_x])]
+    b = [-F]
+
+    for j in range(n):
+        for sign, bound in [(-1, cmin[j]), (1, cmax[j])]:
+            row = np.zeros(2*n + 1)
+            row[j], row[-1] = sign, 1
+            A.append(row)
+            b.append(sign * bound)
+
+        for sign, bound in [(-1, pmin[j]), (1, pmax[j])]:
+            row = np.zeros(2*n + 1)
+            row[n+j], row[-1] = sign, 1
+            A.append(row)
+            b.append(sign * bound)
+
+    bounds = [(None, None)] * (2*n) + [(0, None)]
+    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=bounds, method="highs")
+
+    if not res.success:
+        return {"error": res.message}
+
+    return {
+        "case": "robust",
+        "radius": float(res.x[-1]),
+        "status": "robust profitability region found"
+    }
+
+@app.post("/optimize")
+def optimize(req: OptimizeRequest):
+
+    if req.case == "volume":
+        return solve_volume(req.data)
+
+    if req.case == "price":
+        return solve_price(req.data)
+
+    if req.case == "cost":
+        return solve_cost(req.data)
+
+    if req.case == "robust":
+        return solve_robust(req.data)
+
+    return {"error": "Invalid case"}
