@@ -82,8 +82,8 @@ if result.success:
     print(f"r  = {r:.3f}")
 
     print("\nProfitability interval:")
-    print(f"{x1-r:.2f} ≤ x1 ≤ {x1+r:.2f}")
-    print(f"{x2-r:.2f} ≤ x2 ≤ {x2+r:.2f}")
-    print(f"{x3-r:.2f} ≤ x3 ≤ {x3+r:.2f}")
+    print(f"{x1-r:.2f} <= x1 <= {x1+r:.2f}")
+    print(f"{x2-r:.2f} <= x2 <= {x2+r:.2f}")
+    print(f"{x3-r:.2f} <= x3 <= {x3+r:.2f}")
 else:
     print("Optimization failed:", result.message)
