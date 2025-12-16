@@ -1,59 +1,147 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List
+from typing import Dict, List, Optional, Literal
 import numpy as np
 from scipy.optimize import linprog
 
-app = FastAPI(title="Sphere Packing CVP API")
+app = FastAPI(title="Sphere Packing CVP API – Enterprise")
 
-# ======================
-# DATA MODELS
-# ======================
-class Product(BaseModel):
-    p: float
-    c: float
-    xmin: float
-    xmax: float
+# =====================================================
+# DATA MODELS (REQUEST)
+# =====================================================
 
-class VolumeRequest(BaseModel):
-    products: List[Product]
-    fixed_cost: float
+class GenericProductParams(BaseModel):
+    # Identification
+    code: Optional[str] = None
+    name: Optional[str] = None
 
-class PriceRequest(BaseModel):
-    avg_volume: List[float]
-    cost: List[float]
-    pmin: List[float]
-    pmax: List[float]
-    fixed_cost: float
+    # Volume case
+    p: Optional[str] = None
+    c: Optional[str] = None
+    xmin: Optional[str] = None
+    xmax: Optional[str] = None
 
-class CostRequest(BaseModel):
-    avg_volume: List[float]
-    avg_price: List[float]
-    cmin: List[float]
-    cmax: List[float]
-    fixed_cost: float
+    # Price / Cost / Robust
+    avg_volume: Optional[str] = None
+    avg_price: Optional[str] = None
+    cost: Optional[str] = None
 
-class RobustRequest(BaseModel):
-    avg_volume: List[float]
-    pmin: List[float]
-    pmax: List[float]
-    cmin: List[float]
-    cmax: List[float]
-    fixed_cost: float
-    
-from typing import Dict, Any, Literal
+    pmin: Optional[str] = None
+    pmax: Optional[str] = None
+    cmin: Optional[str] = None
+    cmax: Optional[str] = None
 
-class OptimizeRequest(BaseModel):
+
+class WrappedOptimizeRequest(BaseModel):
     case: Literal["volume", "price", "cost", "robust"]
-    data: Dict[str, Any]
+    fixed_cost: float
+    parameters: Dict[str, List[GenericProductParams]]
 
 
-# ======================
-# CASE 1 – VOLUME
-# ======================
-# @app.post("/optimize/volume")
+class RootOptimizeRequest(BaseModel):
+    request: WrappedOptimizeRequest
+
+
+# =====================================================
+# PARSER (REQUEST → SOLVER DATA)
+# =====================================================
+
+def parse_parameters(req: RootOptimizeRequest):
+    case = req.request.case
+    F = req.request.fixed_cost
+    params = req.request.parameters
+
+    data = {"fixed_cost": F, "products_meta": []}
+
+    # ---------- CASE 1 : VOLUME ----------
+    if case == "volume":
+        data["products"] = []
+        for product_id, records in params.items():
+            r = records[0]
+            data["products"].append({
+                "p": float(r.p),
+                "c": float(r.c),
+                "xmin": float(r.xmin),
+                "xmax": float(r.xmax)
+            })
+            data["products_meta"].append({
+                "product_id": product_id,
+                "code": r.code,
+                "name": r.name
+            })
+
+    # ---------- CASE 2 : PRICE ----------
+    elif case == "price":
+        data.update({
+            "avg_volume": [],
+            "cost": [],
+            "pmin": [],
+            "pmax": []
+        })
+        for product_id, records in params.items():
+            r = records[0]
+            data["avg_volume"].append(float(r.avg_volume))
+            data["cost"].append(float(r.cost))
+            data["pmin"].append(float(r.pmin))
+            data["pmax"].append(float(r.pmax))
+            data["products_meta"].append({
+                "product_id": product_id,
+                "code": r.code,
+                "name": r.name
+            })
+
+    # ---------- CASE 3 : COST ----------
+    elif case == "cost":
+        data.update({
+            "avg_volume": [],
+            "avg_price": [],
+            "cmin": [],
+            "cmax": []
+        })
+        for product_id, records in params.items():
+            r = records[0]
+            data["avg_volume"].append(float(r.avg_volume))
+            data["avg_price"].append(float(r.avg_price))
+            data["cmin"].append(float(r.cmin))
+            data["cmax"].append(float(r.cmax))
+            data["products_meta"].append({
+                "product_id": product_id,
+                "code": r.code,
+                "name": r.name
+            })
+
+    # ---------- CASE 4 : ROBUST ----------
+    elif case == "robust":
+        data.update({
+            "avg_volume": [],
+            "pmin": [],
+            "pmax": [],
+            "cmin": [],
+            "cmax": []
+        })
+        for product_id, records in params.items():
+            r = records[0]
+            data["avg_volume"].append(float(r.avg_volume))
+            data["pmin"].append(float(r.pmin))
+            data["pmax"].append(float(r.pmax))
+            data["cmin"].append(float(r.cmin))
+            data["cmax"].append(float(r.cmax))
+            data["products_meta"].append({
+                "product_id": product_id,
+                "code": r.code,
+                "name": r.name
+            })
+
+    return case, data
+
+
+# =====================================================
+# SOLVERS (MATH – UNCHANGED LOGIC)
+# =====================================================
+
 def solve_volume(data):
     products = data["products"]
+    meta = data["products_meta"]
     F = data["fixed_cost"]
 
     p = np.array([x["p"] for x in products])
@@ -62,52 +150,43 @@ def solve_volume(data):
     xmax = np.array([x["xmax"] for x in products])
 
     d = p - c
-    norm_d = np.linalg.norm(d)
     n = len(d)
+    norm_d = np.linalg.norm(d)
 
     c_obj = np.zeros(n + 1)
     c_obj[-1] = -1
 
-    A, b = [], []
-    A.append(np.hstack([-d, norm_d]))
-    b.append(-F)
+    A, b = [np.hstack([-d, norm_d])], [-F]
 
     for j in range(n):
-        row = np.zeros(n + 1)
-        row[j], row[-1] = -1, 1
-        A.append(row)
+        A.append(np.eye(1, n + 1, j).flatten() * -1 + np.eye(1, n + 1, n).flatten())
         b.append(-xmin[j])
-
-        row = np.zeros(n + 1)
-        row[j], row[-1] = 1, 1
-        A.append(row)
+        A.append(np.eye(1, n + 1, j).flatten() + np.eye(1, n + 1, n).flatten())
         b.append(xmax[j])
 
-    bounds = [(None, None)] * n + [(0, None)]
-    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=bounds, method="highs")
-
-    if not res.success:
-        return {"error": res.message}
+    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=[(None, None)] * n + [(0, None)], method="highs")
 
     x0, r = res.x[:-1], res.x[-1]
 
     return {
         "case": "volume",
-        "center": x0.tolist(),
-        "radius": float(r),
-        "safe_region": [
-            {"min": float(x0[i]-r), "max": float(x0[i]+r)}
+        "fixed_cost": F,
+        "products": [
+            {
+                **meta[i],
+                "center": float(x0[i]),
+                "safe_range": {
+                    "min": float(x0[i] - r),
+                    "max": float(x0[i] + r)
+                }
+            }
             for i in range(n)
         ]
     }
 
 
-
-# ======================
-# CASE 2 – PRICE
-# ======================
-# @app.post("/optimize/price")
 def solve_price(data):
+    meta = data["products_meta"]
     x = np.array(data["avg_volume"])
     c = np.array(data["cost"])
     pmin = np.array(data["pmin"])
@@ -124,41 +203,35 @@ def solve_price(data):
     b = [-(np.dot(c, x) + F)]
 
     for j in range(n):
-        row = np.zeros(n + 1)
-        row[j], row[-1] = -1, 1
-        A.append(row)
+        A.append(np.eye(1, n + 1, j).flatten() * -1 + np.eye(1, n + 1, n).flatten())
         b.append(-pmin[j])
-
-        row = np.zeros(n + 1)
-        row[j], row[-1] = 1, 1
-        A.append(row)
+        A.append(np.eye(1, n + 1, j).flatten() + np.eye(1, n + 1, n).flatten())
         b.append(pmax[j])
 
-    bounds = [(None, None)] * n + [(0, None)]
-    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=bounds, method="highs")
-
-    if not res.success:
-        return {"error": res.message}
+    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=[(None, None)] * n + [(0, None)], method="highs")
 
     p0, r = res.x[:-1], res.x[-1]
+    delta = r / np.sqrt(n)
 
     return {
         "case": "price",
-        "price_center": p0.tolist(),
-        "radius": float(r),
-        "safe_price_range": [
-            {"min": float(p0[i]-r/np.sqrt(n)), "max": float(p0[i]+r/np.sqrt(n))}
+        "fixed_cost": F,
+        "products": [
+            {
+                **meta[i],
+                "price_center": float(p0[i]),
+                "safe_price_range": {
+                    "min": float(p0[i] - delta),
+                    "max": float(p0[i] + delta)
+                }
+            }
             for i in range(n)
         ]
     }
 
 
-
-# ======================
-# CASE 3 – COST
-# ======================
-# @app.post("/optimize/cost")
 def solve_cost(data):
+    meta = data["products_meta"]
     x = np.array(data["avg_volume"])
     p = np.array(data["avg_price"])
     cmin = np.array(data["cmin"])
@@ -175,40 +248,35 @@ def solve_cost(data):
     b = [np.dot(p, x) - F]
 
     for j in range(n):
-        row = np.zeros(n + 1)
-        row[j], row[-1] = -1, 1
-        A.append(row)
+        A.append(np.eye(1, n + 1, j).flatten() * -1 + np.eye(1, n + 1, n).flatten())
         b.append(-cmin[j])
-
-        row = np.zeros(n + 1)
-        row[j], row[-1] = 1, 1
-        A.append(row)
+        A.append(np.eye(1, n + 1, j).flatten() + np.eye(1, n + 1, n).flatten())
         b.append(cmax[j])
 
-    bounds = [(None, None)] * n + [(0, None)]
-    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=bounds, method="highs")
-
-    if not res.success:
-        return {"error": res.message}
+    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=[(None, None)] * n + [(0, None)], method="highs")
 
     c0, r = res.x[:-1], res.x[-1]
+    delta = r / np.sqrt(n)
 
     return {
         "case": "cost",
-        "cost_center": c0.tolist(),
-        "radius": float(r),
-        "safe_cost_range": [
-            {"min": float(c0[i]-r/np.sqrt(n)), "max": float(c0[i]+r/np.sqrt(n))}
+        "fixed_cost": F,
+        "products": [
+            {
+                **meta[i],
+                "cost_center": float(c0[i]),
+                "safe_cost_range": {
+                    "min": float(c0[i] - delta),
+                    "max": float(c0[i] + delta)
+                }
+            }
             for i in range(n)
         ]
     }
 
 
-# ======================
-# CASE 4 – ROBUST (PRICE + COST)
-# ======================
-# @app.post("/optimize/robust")
 def solve_robust(data):
+    meta = data["products_meta"]
     x = np.array(data["avg_volume"])
     pmin, pmax = np.array(data["pmin"]), np.array(data["pmax"])
     cmin, cmax = np.array(data["cmin"]), np.array(data["cmax"])
@@ -217,50 +285,50 @@ def solve_robust(data):
     n = len(x)
     norm_x = np.linalg.norm(x)
 
-    c_obj = np.zeros(2*n + 1)
+    c_obj = np.zeros(2 * n + 1)
     c_obj[-1] = -1
 
-    A = [np.hstack([x, -x, 2*norm_x])]
+    A = [np.hstack([x, -x, 2 * norm_x])]
     b = [-F]
 
     for j in range(n):
         for sign, bound in [(-1, cmin[j]), (1, cmax[j])]:
-            row = np.zeros(2*n + 1)
+            row = np.zeros(2 * n + 1)
             row[j], row[-1] = sign, 1
             A.append(row)
             b.append(sign * bound)
-
         for sign, bound in [(-1, pmin[j]), (1, pmax[j])]:
-            row = np.zeros(2*n + 1)
-            row[n+j], row[-1] = sign, 1
+            row = np.zeros(2 * n + 1)
+            row[n + j], row[-1] = sign, 1
             A.append(row)
             b.append(sign * bound)
 
-    bounds = [(None, None)] * (2*n) + [(0, None)]
-    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=bounds, method="highs")
-
-    if not res.success:
-        return {"error": res.message}
+    res = linprog(c_obj, A_ub=A, b_ub=b, bounds=[(None, None)] * (2 * n) + [(0, None)], method="highs")
 
     return {
         "case": "robust",
+        "fixed_cost": F,
+        "status": "robust profitability region found",
         "radius": float(res.x[-1]),
-        "status": "robust profitability region found"
+        "products": meta
     }
 
+
+# =====================================================
+# API ENDPOINT
+# =====================================================
+
 @app.post("/optimize")
-def optimize(req: OptimizeRequest):
+def optimize(req: RootOptimizeRequest):
+    case, data = parse_parameters(req)
 
-    if req.case == "volume":
-        return solve_volume(req.data)
-
-    if req.case == "price":
-        return solve_price(req.data)
-
-    if req.case == "cost":
-        return solve_cost(req.data)
-
-    if req.case == "robust":
-        return solve_robust(req.data)
+    if case == "volume":
+        return solve_volume(data)
+    if case == "price":
+        return solve_price(data)
+    if case == "cost":
+        return solve_cost(data)
+    if case == "robust":
+        return solve_robust(data)
 
     return {"error": "Invalid case"}
