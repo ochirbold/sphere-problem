@@ -20,9 +20,22 @@ def safe_norm(arr):
 def safe_count(arr):
     return len(arr)
 
+def safe_pow(*args):
+    """
+    Safe pow function that handles both pow(x, y) and pow(x) (square).
+    """
+    if len(args) == 1:
+        # pow(x) returns x²
+        return args[0] ** 2
+    elif len(args) == 2:
+        # pow(x, y) returns x^y
+        return args[0] ** args[1]
+    else:
+        raise ValueError("pow() takes 1 or 2 arguments")
+
 
 SAFE_FUNCTIONS = {
-    "pow": pow,
+    "pow": safe_pow,
     "sqrt": math.sqrt,
     "abs": abs,
     "min": min,
