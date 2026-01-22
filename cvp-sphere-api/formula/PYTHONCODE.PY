@@ -135,14 +135,35 @@ def main():
     print("==== SELECT SQL END ====")
  
     # ------------------------------------------------
-    # DB connect
+    # DB connect - Read credentials from environment variables
     # ------------------------------------------------
+    import os
+    
+    # Read database connection parameters from environment variables
+    db_user = os.environ.get("DB_USER")
+    db_password = os.environ.get("DB_PASSWORD")
+    db_host = os.environ.get("DB_HOST", "172.169.88.80")  # default host
+    db_port = int(os.environ.get("DB_PORT", "1521"))      # default port
+    db_sid = os.environ.get("DB_SID", "DEV")              # default SID
+    
+    # Validate required credentials
+    if not db_user or not db_password:
+        print("ERROR: Database credentials not found in environment variables.")
+        print("Please set the following environment variables:")
+        print("  - DB_USER: Database username")
+        print("  - DB_PASSWORD: Database password")
+        print("Optional environment variables:")
+        print("  - DB_HOST (default: 172.169.88.80)")
+        print("  - DB_PORT (default: 1521)")
+        print("  - DB_SID (default: DEV)")
+        sys.exit(1)
+    
     conn = oracledb.connect(
-        user="MATH_USER",
-        password="Mypswd123$",
-        host="172.169.88.80",
-        port=1521,
-        sid="DEV"
+        user=db_user,
+        password=db_password,
+        host=db_host,
+        port=db_port,
+        sid=db_sid
     )
     cur = conn.cursor()
     cur.execute(select_sql)

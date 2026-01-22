@@ -43,15 +43,57 @@ Example command showing how to use the script with specific formulas.
 
 ## Security Note
 
-**Important:** The `PYTHONCODE.PY` file contains hardcoded database connection credentials with user `MATH_USER`. These are example credentials and should not be used in production.
+**Important:** The `PYTHONCODE.PY` file now reads database credentials from environment variables for security. No hardcoded credentials are present in the code.
 
-**Before using this script:**
+**Setup Instructions:**
 
-1. **Remove or modify the hardcoded credentials** in the `oracledb.connect()` call
-2. **Use environment variables** or a configuration file for sensitive data
-3. **Never commit actual production credentials** to version control
+1. **Copy the example environment file:**
 
-Example of using environment variables:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Edit the `.env` file** with your actual database credentials:
+
+   ```bash
+   # Edit .env file with your preferred text editor
+   # Set DB_USER and DB_PASSWORD to your actual credentials
+   ```
+
+3. **Load environment variables** before running the script:
+
+   **On Linux/Mac:**
+
+   ```bash
+   export $(grep -v '^#' .env | xargs)
+   python PYTHONCODE.py ...
+   ```
+
+   **Or using python-dotenv (recommended):**
+
+   ```bash
+   pip install python-dotenv
+   # The script will automatically load .env file
+   python PYTHONCODE.py ...
+   ```
+
+   **On Windows (PowerShell):**
+
+   ```powershell
+   Get-Content .env | ForEach-Object {
+       if ($_ -match '^\s*([^#][^=]+)=(.*)') {
+           [Environment]::SetEnvironmentVariable($matches[1], $matches[2])
+       }
+   }
+   python PYTHONCODE.py ...
+   ```
+
+**Security Best Practices:**
+
+1. **Never commit `.env` file** to version control (it's in .gitignore)
+2. **Use different credentials** for development, testing, and production
+3. **Rotate passwords** regularly
+4. **Use secret management tools** in production (Kubernetes Secrets, AWS Secrets Manager, etc.)
 
 ```python
 import os
