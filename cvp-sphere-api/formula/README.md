@@ -1,6 +1,130 @@
 # Formula Runtime and Database Calculator
 
-This repository contains tools for safely evaluating mathematical formulas and applying them to database records.
+Энэхүү repository нь математик томьёог аюулгүйгээр үнэлж, мэдээллийн сангийн бичлэгүүдэд хэрэглэх хэрэгслүүдийг агуулдаг.
+
+## Монгол хэлээр заавар
+
+### Багийн гишүүдэд зориулсан заавар
+
+#### 1. Кодоо татаж авах (Pull хийх)
+
+**Эхний удаа кодоо татаж авах:**
+
+```bash
+# GitHub repository-г clone хийх
+git clone https://github.com/ochirbold/sphere-problem.git
+cd sphere-problem
+```
+
+**Аль хэдийн clone хийсэн бол шинэчлэлт татаж авах:**
+
+```bash
+# Одоогийн branch дээрээ байгаа эсэхийг шалгах
+git checkout main
+
+# GitHub-с шинэчлэлтүүдийг татаж авах
+git pull origin main
+```
+
+#### 2. Мэдээллийн сан холболтыг тохируулах
+
+**Анхаар:** Кодонд нууц мэдээлэл байхгүй. Та өөрийн мэдээллийн сангийн нууц үгээ тохируулах шаардлагатай.
+
+**Алхам алхмаар заавар:**
+
+1. **Жишээ тохиргооны файл үүсгэх:**
+
+   ```bash
+   cd cvp-sphere-api/formula
+   cp .env.example .env
+   ```
+
+2. **.env файлыг засах:**
+
+   ```bash
+   # Текст редактор ашиглан .env файлыг нээх
+   # Дараах утгуудыг өөрчлөх:
+
+   # Мэдээллийн сангийн хэрэглэгчийн нэр
+   DB_USER=МЭДЭЭЛЛИЙН_САНГИЙН_ХЭРЭГЛЭГЧ
+
+   # Мэдээллийн сангийн нууц үг
+   DB_PASSWORD=НУУЦ_ҮГ
+
+   # Бусад утгуудыг шаардлагатай бол өөрчлөх
+   # DB_HOST, DB_PORT, DB_SID
+   ```
+
+3. **Орчны хувьсагч тохируулах:**
+
+   **Windows (PowerShell):**
+
+   ```powershell
+   # .env файлаас орчны хувьсагч унших
+   Get-Content .env | ForEach-Object {
+       if ($_ -match '^\s*([^#][^=]+)=(.*)') {
+           [Environment]::SetEnvironmentVariable($matches[1], $matches[2])
+       }
+   }
+   ```
+
+   **Linux/Mac:**
+
+   ```bash
+   # .env файлаас орчны хувьсагч унших
+   export $(grep -v '^#' .env | xargs)
+   ```
+
+#### 3. Pythoncode.py скрипт ажиллуулах
+
+**Шаардлагатай сангууд суулгах:**
+
+```bash
+pip install oracledb
+```
+
+**Скрипт ажиллуулах:**
+
+```bash
+# Ерөнхий хэлбэр:
+python PYTHONCODE.py <хүснэгтийн_нэр> <id_багана> <ТОМЬЁО> [ТОМЬЁО ...] '"багана1":багана1 "багана2":багана2'
+
+# Жишээ (req файлд байгаа командыг ашиглах):
+python PYTHONCODE.py VT_DATA.V_17687947217601 ID 'CM_J:P_J - C_J' 'X0_J:(X_MIN_J + X_MAX_J) / 2' 'R:(X_MAX_J - X_MIN_J) / 2' 'SAFE_X_MIN:X0_J - R' 'SAFE_X_MAX:X0_J + R' '"P_J":P_J "C_J":C_J "X_MIN_J":X_MIN_J "X_MAX_J":X_MAX_J "F":F "CM_J":CM_J "X0_J":X0_J "R":R "SAFE_X_MIN":SAFE_X_MIN "SAFE_X_MAX":SAFE_X_MAX'
+```
+
+**Алдаа гарвал:**
+
+- `DB_USER`, `DB_PASSWORD` орчны хувьсагч тохируулсан эсэхийг шалгах
+- Мэдээллийн сантай холбогдох эрх шалгах
+- Хүснэгт, багануудын нэр зөв эсэхийг шалгах
+
+#### 4. Хамтын ажиллагаа
+
+**Өөрчлөлт оруулах:**
+
+```bash
+# Шинэ branch үүсгэх
+git checkout -b шинэ-функциональ
+
+# Өөрчлөлтүүд хийх
+# Файлуудыг засах
+
+# Өөрчлөлтүүдээ нэмэх
+git add .
+
+# Commit хийх
+git commit -m "Өөрчлөлтийн тайлбар"
+
+# GitHub руу push хийх
+git push origin шинэ-функциональ
+
+# GitHub дээр Pull Request үүсгэх
+```
+
+---
+
+## Files
 
 ## Files
 
