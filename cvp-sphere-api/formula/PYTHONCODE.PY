@@ -70,6 +70,70 @@ def normalize_row(row: dict):
  
  
 # ------------------------------------------------
+# Database helper functions
+# ------------------------------------------------
+def get_db_connection():
+    """Get database connection using environment variables."""
+    from dotenv import load_dotenv
+    import os
+    
+    load_dotenv()
+    
+    db_user = os.environ.get("DB_USER")
+    db_password = os.environ.get("DB_PASSWORD")
+    db_host = os.environ.get("DB_HOST", "172.169.88.80")
+    db_port = int(os.environ.get("DB_PORT", "1521"))
+    db_sid = os.environ.get("DB_SID", "DEV")
+    
+    if not db_user or not db_password:
+        raise ValueError("Database credentials not found in environment variables")
+    
+    return oracledb.connect(
+        user=db_user,
+        password=db_password,
+        host=db_host,
+        port=db_port,
+        sid=db_sid
+    )
+
+
+def get_formulas_from_db(indicator_id):
+    """
+    Get formulas from database for given indicator_id.
+    Returns (table_name, formulas_dict)
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # Get table name from kpi_indicator
+    cur.execute("SELECT TABLE_NAME FROM kpi_indicator WHERE id = :id", 
+                {"id": indicator_id})
+    table_result = cur.fetchone()
+    if not table_result:
+        raise ValueError(f"Indicator with id {indicator_id} not found in kpi_indicator")
+    table_name = table_result[0]
+    
+    # Get formulas from kpi_indicator_indicator_map
+    cur.execute(
+        "SELECT expression_string, column_name FROM kpi_indicator_indicator_map "
+        "WHERE main_indicator_id = :id AND EXPRESSION_STRING IS NOT NULL",
+        {"id": indicator_id}
+    )
+    formulas_result = cur.fetchall()
+    
+    cur.close()
+    conn.close()
+    
+    # Convert to formulas dict: column_name -> expression_string
+    formulas = {}
+    for expr, col in formulas_result:
+        if expr and col:
+            formulas[col] = expr
+    
+    return table_name, formulas
+
+
+# ------------------------------------------------
 # Auto-mapping generator
 # ------------------------------------------------
 def generate_auto_mapping(formulas):
@@ -94,34 +158,75 @@ def generate_auto_mapping(formulas):
 # MAIN
 # ------------------------------------------------
 def main():
-    if len(sys.argv) < 4:
+    if len(sys.argv) < 3:
         print(
             "Usage:\n"
-            "python pythoncode.py <table> <id_column> "
-            "<TARGET:EXPR> [TARGET:EXPR ...]\n\n"
-            "Example:\n"
-            "python PYTHONCODE.PY VT_DATA.V_17687947217601 ID "
-            "'CM_J:P_J - C_J' 'X0_J:(X_MIN_J + X_MAX_J) / 2'\n\n"
-            "Note: Column mapping is now generated automatically from formulas!"
+            "python pythoncode.py <table_or_indicator_id> <id_column> "
+            "[TARGET:EXPR ...]\n\n"
+            "Modes:\n"
+            "1. Indicator ID mode: python PYTHONCODE.PY 17687947217601 ID\n"
+            "   - Gets table name and formulas automatically from database\n"
+            "   - No need to specify formulas manually\n\n"
+            "2. Manual mode: python PYTHONCODE.PY VT_DATA.V_17687947217601 ID "
+            "'CM_J:P_J - C_J' 'X0_J:(X_MIN_J + X_MAX_J) / 2'\n"
+            "   - Specify table name and formulas manually\n"
+            "   - Column mapping is auto-generated from formulas\n\n"
+            "3. Legacy mode: Add manual mapping as last argument for backward compatibility\n"
         )
         print(f"\nReceived {len(sys.argv)-1} arguments: {sys.argv[1:]}")
         sys.exit(1)
  
-    table = sys.argv[1]
+    arg1 = sys.argv[1]
     id_column = sys.argv[2]
-    formula_inputs = sys.argv[3:]
     
-    # Check if last argument is manual mapping (old format)
+    # Check if first argument is numeric (indicator ID)
+    formulas = {}
     manual_mapping = None
-    if formula_inputs and formula_inputs[-1].count('"') >= 2 and ':' in formula_inputs[-1]:
-        # Check if it looks like a mapping string
-        mapping_str = formula_inputs[-1]
-        if all(':' in part for part in mapping_str.replace('"', '').split()):
-            manual_mapping = parse_column_mapping(mapping_str)
-            formula_inputs = formula_inputs[:-1]  # Remove mapping from formulas
     
-    # Parse formulas
-    formulas = dict(split_formula(f) for f in formula_inputs)
+    if arg1.isdigit():
+        # MODE 1: Indicator ID mode - get everything from database
+        indicator_id = int(arg1)
+        print(f"[INFO] Indicator ID mode: {indicator_id}")
+        
+        try:
+            table, formulas = get_formulas_from_db(indicator_id)
+            print(f"[INFO] Got table name from DB: {table}")
+            print(f"[INFO] Got {len(formulas)} formulas from DB")
+            
+            # Show formulas
+            for col, expr in sorted(formulas.items()):
+                print(f"  {col}: {expr}")
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to get data from database: {e}")
+            print("\nMake sure:")
+            print("1. Database credentials are in .env file")
+            print("2. You have access to kpi_indicator and kpi_indicator_indicator_map tables")
+            print("3. Indicator ID exists in the database")
+            sys.exit(1)
+            
+        formula_inputs = sys.argv[3:]  # Any additional formulas override DB ones
+        
+    else:
+        # MODE 2: Manual mode
+        table = arg1
+        formula_inputs = sys.argv[3:]
+        
+        # Check if last argument is manual mapping (old format)
+        if formula_inputs and formula_inputs[-1].count('"') >= 2 and ':' in formula_inputs[-1]:
+            mapping_str = formula_inputs[-1]
+            if all(':' in part for part in mapping_str.replace('"', '').split()):
+                manual_mapping = parse_column_mapping(mapping_str)
+                formula_inputs = formula_inputs[:-1]
+        
+        # Parse manual formulas
+        if formula_inputs:
+            formulas = dict(split_formula(f) for f in formula_inputs)
+    
+    # If no formulas found, error
+    if not formulas:
+        print("[ERROR] No formulas found. Please specify formulas or use valid indicator ID.")
+        sys.exit(1)
     
     # Generate or use manual mapping
     if manual_mapping:
@@ -245,7 +350,7 @@ def main():
  
         if values:
             print(
-                f"[PREVIEW] ID={row_id} → "
+                f"[PREVIEW] ID={row_id} -> "
                 + ", ".join(f"{k}={v}" for k, v in values.items())
             )
  
