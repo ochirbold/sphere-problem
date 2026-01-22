@@ -43,11 +43,13 @@ Example command showing how to use the script with specific formulas.
 
 ## Security Note
 
-**Important:** The `PYTHONCODE.PY` file contains hardcoded database connection credentials. Before using this script:
+**Important:** The `PYTHONCODE.PY` file contains hardcoded database connection credentials with user `MATH_USER`. These are example credentials and should not be used in production.
+
+**Before using this script:**
 
 1. **Remove or modify the hardcoded credentials** in the `oracledb.connect()` call
 2. **Use environment variables** or a configuration file for sensitive data
-3. **Never commit actual credentials** to version control
+3. **Never commit actual production credentials** to version control
 
 Example of using environment variables:
 

@@ -138,8 +138,8 @@ def main():
     # DB connect
     # ------------------------------------------------
     conn = oracledb.connect(
-        user="DEVPROD",
-        password="Tg4u#D3vPr0d!",
+        user="MATH_USER",
+        password="Mypswd123$",
         host="172.169.88.80",
         port=1521,
         sid="DEV"
