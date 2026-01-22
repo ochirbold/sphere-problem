@@ -80,10 +80,26 @@ git pull origin main
 **Шаардлагатай сангууд суулгах:**
 
 ```bash
-pip install oracledb
+# cvp-sphere-api хавтас руу орж
+cd cvp-sphere-api
+
+# Шаардлагатай сангууд суулгах
+pip install -r requirements.txt
+
+# Эсвэл ганц сангууд суулгах
+pip install oracledb python-dotenv
 ```
 
 **Скрипт ажиллуулах:**
+
+**Анхаар:** Одоо скрипт `.env` файлаас автоматаар мэдээллийн сангийн холболтын мэдээллийг уншина. Тиймээс орчны хувьсагч тохируулах шаардлагагүй.
+
+````bash
+# cvp-sphere-api/formula хавтас руу орж
+cd cvp-sphere-api/formula
+
+# Скрипт ажиллуулах
+python PYTHONCODE.py ...
 
 ```bash
 # Ерөнхий хэлбэр:
@@ -91,7 +107,7 @@ python PYTHONCODE.py <хүснэгтийн_нэр> <id_багана> <ТОМЬЁ
 
 # Жишээ (req файлд байгаа командыг ашиглах):
 python PYTHONCODE.py VT_DATA.V_17687947217601 ID 'CM_J:P_J - C_J' 'X0_J:(X_MIN_J + X_MAX_J) / 2' 'R:(X_MAX_J - X_MIN_J) / 2' 'SAFE_X_MIN:X0_J - R' 'SAFE_X_MAX:X0_J + R' '"P_J":P_J "C_J":C_J "X_MIN_J":X_MIN_J "X_MAX_J":X_MAX_J "F":F "CM_J":CM_J "X0_J":X0_J "R":R "SAFE_X_MIN":SAFE_X_MIN "SAFE_X_MAX":SAFE_X_MAX'
-```
+````
 
 **Алдаа гарвал:**
 

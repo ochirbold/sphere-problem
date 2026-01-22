@@ -1,8 +1,13 @@
 import sys
 import oracledb
 from collections import defaultdict
+from dotenv import load_dotenv
+import os
  
 from formula_runtime import run_formula, extract_identifiers
+ 
+# Load environment variables from .env file
+load_dotenv()
  
  
 # ------------------------------------------------
@@ -137,7 +142,6 @@ def main():
     # ------------------------------------------------
     # DB connect - Read credentials from environment variables
     # ------------------------------------------------
-    import os
     
     # Read database connection parameters from environment variables
     db_user = os.environ.get("DB_USER")
