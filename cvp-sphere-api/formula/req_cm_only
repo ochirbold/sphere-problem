@@ -1,0 +1,19 @@
+# Зөвхөн CM_J:P_J - C_J томьёог ажиллуулах
+# PowerShell дээр ажиллуулах (backtick ашиглан мөр таслах)
+python PYTHONCODE.PY `
+    VT_DATA.V_17687947217601 `
+    ID `
+    'CM_J:P_J - C_J' `
+    '"P_J":P_J "C_J":C_J "CM_J":CM_J'
+
+# Нэг мөрөнд ажиллуулах (бүх системд)
+# python PYTHONCODE.PY VT_DATA.V_17687947217601 ID 'CM_J:P_J - C_J' '"P_J":P_J "C_J":C_J "CM_J":CM_J'
+
+# Тайлбар:
+# - VT_DATA.V_17687947217601: Хүснэгтийн нэр
+# - ID: ID баганын нэр  
+# - 'CM_J:P_J - C_J': Томьёо (CM_J = P_J - C_J)
+# - '"P_J":P_J "C_J":C_J "CM_J":CM_J': Баганын mapping
+#   * P_J → P_J (оролтын багана)
+#   * C_J → C_J (оролтын багана)
+#   * CM_J → CM_J (гаралтын багана)
