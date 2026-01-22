@@ -150,11 +150,6 @@ def main():
     db_port = int(os.environ.get("DB_PORT", "1521"))      # default port
     db_sid = os.environ.get("DB_SID", "DEV")              # default SID
     
-    # Debug information
-    print(f"[DEBUG] Looking for .env file at: {os.path.abspath('.env')}")
-    print(f"[DEBUG] DB_USER from env: {'[SET]' if db_user else '[NOT SET]'}")
-    print(f"[DEBUG] DB_PASSWORD from env: {'[SET]' if db_password else '[NOT SET]'}")
-    
     # Validate required credentials
     if not db_user or not db_password:
         print("\n" + "="*60)
@@ -167,8 +162,6 @@ def main():
         print("4. Required variables in .env file:")
         print("   DB_USER=your_database_username")
         print("   DB_PASSWORD=your_database_password")
-        print("\nCurrent .env file location should be:")
-        print(f"   {os.path.abspath('.env')}")
         print("\n" + "="*60)
         sys.exit(1)
     
@@ -202,11 +195,9 @@ def main():
         for target in order:
             try:
                 val = run_formula(formulas[target], row)
-                print(f"[DEBUG] ID={row_id} {target} = {val}")
                 row[target] = val
                 values[target] = val
             except Exception as fe:
-                print(f"[DEBUG] ID={row_id} {target} ERROR → {fe}")
                 errors.append((row_id, target, str(fe)))
  
         if values:
