@@ -343,6 +343,12 @@ def main():
         for target in order:
             try:
                 val = run_formula(formulas[target], row)
+                
+                # Skip if value is None (e.g., sqrt of negative number)
+                if val is None:
+                    print(f"[SKIP] ID={row_id} {target} = None (skipped)")
+                    continue
+                    
                 row[target] = val
                 values[target] = val
             except Exception as fe:

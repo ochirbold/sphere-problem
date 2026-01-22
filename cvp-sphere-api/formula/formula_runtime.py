@@ -33,10 +33,18 @@ def safe_pow(*args):
     else:
         raise ValueError("pow() takes 1 or 2 arguments")
 
+def safe_sqrt(x):
+    """
+    Safe sqrt function that returns None for negative numbers.
+    """
+    if x < 0:
+        return None  # Will be skipped in PYTHONCODE.PY
+    return math.sqrt(x)
+
 
 SAFE_FUNCTIONS = {
     "pow": safe_pow,
-    "sqrt": math.sqrt,
+    "sqrt": safe_sqrt,
     "abs": abs,
     "min": min,
     "max": max,
@@ -101,6 +109,11 @@ class _SafeEvaluator(ast.NodeVisitor):
 
             fn = SAFE_FUNCTIONS[fn_name]
             args = [self.visit(a) for a in node.args]
+            
+            # Debug logging for pow and sqrt functions
+            if fn_name in ['pow', 'sqrt']:
+                print(f"[DEBUG] {fn_name}() called with {len(args)} args: {args}")
+            
             return fn(*args)
 
         raise ValueError(f"Unsupported expression: {ast.dump(node)}")
