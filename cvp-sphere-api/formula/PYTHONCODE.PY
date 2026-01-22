@@ -70,28 +70,70 @@ def normalize_row(row: dict):
  
  
 # ------------------------------------------------
+# Auto-mapping generator
+# ------------------------------------------------
+def generate_auto_mapping(formulas):
+    """
+    Generate column mapping automatically from formulas.
+    Returns dict like {'P_J': 'P_J', 'C_J': 'C_J', ...}
+    """
+    all_identifiers = set()
+    
+    # Extract all identifiers from all formulas
+    for expr in formulas.values():
+        all_identifiers |= extract_identifiers(expr)
+    
+    # Also include all formula targets (output columns)
+    all_identifiers |= set(formulas.keys())
+    
+    # Create mapping: identifier -> identifier (same name)
+    return {ident: ident for ident in sorted(all_identifiers)}
+
+
+# ------------------------------------------------
 # MAIN
 # ------------------------------------------------
 def main():
-    if len(sys.argv) < 5:
+    if len(sys.argv) < 4:
         print(
             "Usage:\n"
             "python pythoncode.py <table> <id_column> "
-            "<TARGET:EXPR> [TARGET:EXPR ...] "
-            '\'"A":A "B":B "C":C "D":D "X1":X1 "X2":X2\''
+            "<TARGET:EXPR> [TARGET:EXPR ...]\n\n"
+            "Example:\n"
+            "python PYTHONCODE.PY VT_DATA.V_17687947217601 ID "
+            "'CM_J:P_J - C_J' 'X0_J:(X_MIN_J + X_MAX_J) / 2'\n\n"
+            "Note: Column mapping is now generated automatically from formulas!"
         )
         print(f"\nReceived {len(sys.argv)-1} arguments: {sys.argv[1:]}")
         sys.exit(1)
  
     table = sys.argv[1]
     id_column = sys.argv[2]
-    formula_inputs = sys.argv[3:-1]
-    mapping = parse_column_mapping(sys.argv[-1])
- 
-    # ------------------------------------------------
+    formula_inputs = sys.argv[3:]
+    
+    # Check if last argument is manual mapping (old format)
+    manual_mapping = None
+    if formula_inputs and formula_inputs[-1].count('"') >= 2 and ':' in formula_inputs[-1]:
+        # Check if it looks like a mapping string
+        mapping_str = formula_inputs[-1]
+        if all(':' in part for part in mapping_str.replace('"', '').split()):
+            manual_mapping = parse_column_mapping(mapping_str)
+            formula_inputs = formula_inputs[:-1]  # Remove mapping from formulas
+    
     # Parse formulas
-    # ------------------------------------------------
     formulas = dict(split_formula(f) for f in formula_inputs)
+    
+    # Generate or use manual mapping
+    if manual_mapping:
+        mapping = manual_mapping
+        print("[INFO] Using manual column mapping")
+    else:
+        mapping = generate_auto_mapping(formulas)
+        print("[INFO] Auto-generated column mapping from formulas")
+    
+    # Show generated mapping
+    mapping_str = " ".join(f'"{k}":{v}' for k, v in sorted(mapping.items()))
+    print(f"[INFO] Mapping: {mapping_str}")
  
     # ------------------------------------------------
     # OPTION 1: output mapping validation
