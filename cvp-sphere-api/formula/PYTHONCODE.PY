@@ -73,13 +73,14 @@ def normalize_row(row: dict):
 # MAIN
 # ------------------------------------------------
 def main():
-    if len(sys.argv) < 6:
+    if len(sys.argv) < 5:
         print(
             "Usage:\n"
             "python pythoncode.py <table> <id_column> "
             "<TARGET:EXPR> [TARGET:EXPR ...] "
             '\'"A":A "B":B "C":C "D":D "X1":X1 "X2":X2\''
         )
+        print(f"\nReceived {len(sys.argv)-1} arguments: {sys.argv[1:]}")
         sys.exit(1)
  
     table = sys.argv[1]
