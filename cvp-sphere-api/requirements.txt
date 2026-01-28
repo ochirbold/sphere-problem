@@ -4,3 +4,4 @@ numpy
 scipy
 oracledb
 python-dotenv
+pydantic 

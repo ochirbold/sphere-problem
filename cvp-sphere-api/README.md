@@ -8,7 +8,32 @@
 
 ### Багийн гишүүдэд зориулсан заавар
 
-#### 1. Кодоо татаж авах (Pull хийх)
+#### 1. Virtual Environment ашиглах
+
+**Анхаар:** Төсөлд `cvp-sphere-api/venv/` фолдер байгаа бөгөөд энэ нь шаардлагатай бүх Python сангуудыг агуулдаг. Хэрэв та шинээр суулгахыг хүсвэл:
+
+```bash
+# cvp-sphere-api хавтас руу орж
+cd cvp-sphere-api
+
+# Virtual environment үүсгэх (хэрэв байхгүй бол)
+python -m venv venv
+
+# Virtual environment идэвхжүүлэх
+# Windows (Command Prompt):
+venv\Scripts\activate
+# Windows (PowerShell):
+.\venv\Scripts\Activate.ps1
+# Linux/Mac:
+source venv/bin/activate
+
+# Шаардлагатай сангууд суулгах
+pip install -r requirements.txt
+```
+
+**Анхаар:** Хэрэв та virtual environment ашиглахгүй бол системийн Python ашиглана. Гэхдээ virtual environment ашиглах нь илүү аюулгүй бөгөөд төслүүдийн хооронд сангуудын зөрчилдөөнөөс сэргийлнэ.
+
+#### 2. Кодоо татаж авах (Pull хийх)
 
 **Эхний удаа кодоо татаж авах:**
 
@@ -28,7 +53,7 @@ git checkout main
 git pull origin main
 ```
 
-#### 2. Мэдээллийн сан холболтыг тохируулах
+#### 3. Мэдээллийн сан холболтыг тохируулах
 
 **Анхаар:** Кодонд нууц мэдээлэл байхгүй. Та өөрийн мэдээллийн сангийн нууц үгээ тохируулах шаардлагатай.
 
@@ -77,7 +102,7 @@ git pull origin main
    export $(grep -v '^#' .env | xargs)
    ```
 
-#### 3. Pythoncode.py скрипт ажиллуулах
+#### 4. Pythoncode.py скрипт ажиллуулах
 
 **Шаардлагатай сангууд суулгах:**
 
@@ -117,7 +142,7 @@ python PYTHONCODE.py VT_DATA.V_17687947217601 ID 'CM_J:P_J - C_J' 'X0_J:(X_MIN_J
 - Мэдээллийн сантай холбогдох эрх шалгах
 - Хүснэгт, багануудын нэр зөв эсэхийг шалгах
 
-#### 4. Хамтын ажиллагаа
+#### 5. Хамтын ажиллагаа
 
 **Өөрчлөлт оруулах:**
 
