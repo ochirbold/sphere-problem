@@ -342,14 +342,13 @@ async def calculate_formulas(request: FormulaRequest):
         
         # Get current directory
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        formula_dir = os.path.join(current_dir, "formula")
         
-        # Execute
+        # Execute from current directory
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            cwd=formula_dir
+            cwd=current_dir
         )
         
         # Parse output
