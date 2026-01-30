@@ -1,8 +1,8 @@
-# Formula Runtime and Database Calculator
+# CVP Sphere API - Formula Runtime and Database Calculator
 
 **Байршил:** Энэ README.md файл одоо `cvp-sphere-api/` хавтасанд байрладаг. Formula файлууд `cvp-sphere-api/formula/` хавтасанд байна.
 
-Энэхүү repository нь математик томьёог аюулгүйгээр үнэлж, мэдээллийн сангийн бичлэгүүдэд хэрэглэх хэрэгслүүдийг агуулдаг.
+Энэхүү repository нь математик томьёог аюулгүйгээр үнэлж, мэдээллийн сангийн бичлэгүүдэд хэрэглэх хэрэгслүүдийг агуулдаг. FastAPI суурьтай CVP (Cost-Volume-Profit) Optimization & Formula Engine API-г багтаасан.
 
 ## Монгол хэлээр заавар
 
@@ -167,11 +167,249 @@ git push origin шинэ-функциональ
 
 ---
 
-## Files
+## FastAPI CVP Optimization & Formula Engine API
 
-## Files
+**Version:** 2.0.0
 
-### 1. formula_runtime.py
+Энэхүү API нь CVP (Cost-Volume-Profit) анализ хийх, математик томьёог аюулгүйгээр үнэлэх, мэдээллийн сангийн бичлэгүүдэд томьёог хэрэглэх боломжийг олгодог.
+
+### API Ажиллуулах
+
+#### Development Mode (Хөгжүүлэлтийн горим):
+
+```bash
+# cvp-sphere-api хавтас руу орж
+cd cvp-sphere-api
+
+# Virtual environment идэвхжүүлэх (хэрэв байгаа бол)
+# Windows:
+venv\Scripts\activate
+# Linux/Mac:
+source venv/bin/activate
+
+# FastAPI серверийг ажиллуулах
+uvicorn main:app --reload --port 8000
+```
+
+#### Production Mode (Үйлдвэрийн горим):
+
+```bash
+# start.sh скрипт ашиглах
+./start.sh
+
+# Эсвэл шууд командаар
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+#### API Documentation:
+
+API нь автоматаар Swagger болон ReDoc documentation үүсгэдэг:
+
+- **Swagger UI:** http://localhost:8000/docs
+- **ReDoc:** http://localhost:8000/redoc
+- **API Root:** http://localhost:8000/
+
+### Docker Ашиглах
+
+#### Docker Image Бэлдэх:
+
+```bash
+# cvp-sphere-api хавтас руу орж
+cd cvp-sphere-api
+
+# Docker image бэлдэх
+docker build -t cvp-sphere-api .
+
+# Image шалгах
+docker images | grep cvp-sphere-api
+```
+
+#### Docker Container Ажиллуулах:
+
+```bash
+# Container ажиллуулах
+docker run -p 8000:8000 cvp-sphere-api
+
+# Environment variables тохируулахтай ажиллуулах
+docker run -p 8000:8000 -e DB_USER=your_user -e DB_PASSWORD=your_password cvp-sphere-api
+
+# .env файл ашиглах
+docker run -p 8000:8000 --env-file formula/.env cvp-sphere-api
+```
+
+#### Docker Compose Ашиглах (хэрэгтэй бол):
+
+`docker-compose.yml` файл үүсгэх:
+
+```yaml
+version: "3.8"
+services:
+  cvp-sphere-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_SID=${DB_SID}
+    volumes:
+      - ./logs:/app/logs
+```
+
+### Railway Deployment
+
+#### Railway CLI Суулгах:
+
+```bash
+# Railway CLI суулгах
+npm install -g @railway/cli
+
+# Railway руу нэвтрэх
+railway login
+```
+
+#### Railway Проект Үүсгэх:
+
+```bash
+# Railway проект үүсгэх
+railway init
+
+# Environment variables тохируулах
+railway variables set DB_USER your_username
+railway variables set DB_PASSWORD your_password
+railway variables set DB_HOST 172.169.88.80
+railway variables set DB_PORT 1521
+railway variables set DB_SID DEV
+
+# Deploy хийх
+railway up
+```
+
+#### Railway Dashboard Ашиглах:
+
+1. https://railway.app руу нэвтрэх
+2. "New Project" дарж шинэ проект үүсгэх
+3. "Deploy from GitHub repo" сонгох
+4. `ochirbold/sphere-problem` repository сонгох
+5. `cvp-sphere-api` хавтасыг root болгох
+6. Environment variables тохируулах
+7. Deploy хийх
+
+### API Endpoints
+
+#### 1. CVP Optimization (`POST /optimize`)
+
+CVP анализ хийх (volume, price, cost, robust case):
+
+```bash
+curl -X POST "http://localhost:8000/optimize" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "case": "volume",
+    "fixedCost": "10000",
+    "products": [
+      {
+        "itemName": "Product A",
+        "itemCode": "PA001",
+        "p": "150",
+        "c": "100",
+        "xmin": "50",
+        "xmax": "200"
+      }
+    ]
+  }'
+```
+
+#### 2. Formula Calculation (`POST /formula/calculate`)
+
+Мэдээллийн сангаас өгөгдөл уншиж томьёог тооцоолох:
+
+```bash
+curl -X POST "http://localhost:8000/formula/calculate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "indicator_id": 17687947217601,
+    "id_column": "ID",
+    "formulas": [
+      "CM_J:P_J - C_J",
+      "X0_J:(X_MIN_J + X_MAX_J) / 2"
+    ]
+  }'
+```
+
+#### 3. Direct Formula Calculation (`POST /formula/calculate/direct`)
+
+Мэдээллийн сангүйгээр шууд тооцоолох:
+
+```bash
+curl -X POST "http://localhost:8000/formula/calculate/direct" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "VT_DATA",
+    "id_column": "ID",
+    "formulas": {
+      "CM_J": "P_J - C_J",
+      "X0_J": "(X_MIN_J + X_MAX_J) / 2"
+    },
+    "data": [
+      {
+        "ID": 1,
+        "P_J": 150,
+        "C_J": 100,
+        "X_MIN_J": 50,
+        "X_MAX_J": 200
+      }
+    ]
+  }'
+```
+
+#### 4. Health Checks:
+
+```bash
+# System health check
+curl "http://localhost:8000/health"
+
+# Formula engine health check
+curl "http://localhost:8000/formula/health"
+```
+
+### Environment Variables
+
+API ажиллуулахын тулд дараах environment variables тохируулах шаардлагатай:
+
+#### Database Connection:
+
+```bash
+DB_USER=your_username           # Мэдээллийн сангийн хэрэглэгчийн нэр
+DB_PASSWORD=your_password       # Мэдээллийн сангийн нууц үг
+DB_HOST=172.169.88.80           # Мэдээллийн сангийн хаяг
+DB_PORT=1521                    # Мэдээллийн сангийн порт
+DB_SID=DEV                      # Мэдээллийн сангийн SID
+```
+
+#### API Configuration:
+
+```bash
+PORT=8000                       # API серверийн порт
+PYTHONPATH=/app                 # Python path
+PYTHONUNBUFFERED=1              # Python unbuffered output
+```
+
+#### Development Configuration:
+
+```bash
+# Development mode (auto-reload)
+UVICORN_RELOAD=true
+
+# Log level
+LOG_LEVEL=info
+```
+
+### Files
+
+#### 1. formula_runtime.py
 
 A secure formula evaluator using Python's AST (Abstract Syntax Tree) for safe expression evaluation.
 
@@ -187,7 +425,7 @@ A secure formula evaluator using Python's AST (Abstract Syntax Tree) for safe ex
 - Basic math: `pow`, `sqrt`, `abs`, `min`, `max`
 - Array operations: `SUM`, `AVG`, `DOT`, `NORM`, `COUNT`
 
-### 2. PYTHONCODE.PY
+#### 2. PYTHONCODE.PY
 
 A script to read data from Oracle database, apply formulas, and update the database with results.
 
@@ -204,11 +442,11 @@ A script to read data from Oracle database, apply formulas, and update the datab
 python PYTHONCODE.py <table> <id_column> <TARGET:EXPR> [TARGET:EXPR ...] '"col1":col1 "col2":col2'
 ```
 
-### 3. req
+#### 3. req
 
 Example command showing how to use the script with specific formulas.
 
-## Security Note
+### Security Note
 
 **Important:** The `PYTHONCODE.PY` file now reads database credentials from environment variables for security. No hardcoded credentials are present in the code.
 
@@ -220,81 +458,4 @@ Example command showing how to use the script with specific formulas.
    cp .env.example .env
    ```
 
-2. **Edit the `.env` file** with your actual database credentials:
-
-   ```bash
-   # Edit .env file with your preferred text editor
-   # Set DB_USER and DB_PASSWORD to your actual credentials
-   ```
-
-3. **Load environment variables** before running the script:
-
-   **On Linux/Mac:**
-
-   ```bash
-   export $(grep -v '^#' .env | xargs)
-   python PYTHONCODE.py ...
-   ```
-
-   **Or using python-dotenv (recommended):**
-
-   ```bash
-   pip install python-dotenv
-   # The script will automatically load .env file
-   python PYTHONCODE.py ...
-   ```
-
-   **On Windows (PowerShell):**
-
-   ```powershell
-   Get-Content .env | ForEach-Object {
-       if ($_ -match '^\s*([^#][^=]+)=(.*)') {
-           [Environment]::SetEnvironmentVariable($matches[1], $matches[2])
-       }
-   }
-   python PYTHONCODE.py ...
-   ```
-
-**Security Best Practices:**
-
-1. **Never commit `.env` file** to version control (it's in .gitignore)
-2. **Use different credentials** for development, testing, and production
-3. **Rotate passwords** regularly
-4. **Use secret management tools** in production (Kubernetes Secrets, AWS Secrets Manager, etc.)
-
-```python
-import os
-conn = oracledb.connect(
-    user=os.environ.get("DB_USER", "your_user"),
-    password=os.environ.get("DB_PASSWORD", "your_password"),
-    host=os.environ.get("DB_HOST", "localhost"),
-    port=int(os.environ.get("DB_PORT", "1521")),
-    sid=os.environ.get("DB_SID", "ORCL")
-)
-```
-
-## Installation
-
-1. Install required packages:
-
-```bash
-pip install oracledb
-```
-
-2. Set up environment variables for database connection:
-
-```bash
-export DB_USER=your_username
-export DB_PASSWORD=your_password
-export DB_HOST=your_host
-export DB_PORT=1521
-export DB_SID=your_sid
-```
-
-## Example
-
-See the `req` file for a complete example command.
-
-## License
-
-This code is provided for educational and demonstration purposes. Use at your own risk.
+2. **Edit the `.env` file**
