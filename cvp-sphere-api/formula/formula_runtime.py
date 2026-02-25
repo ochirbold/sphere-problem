@@ -122,6 +122,162 @@ def safe_sqrt(x):
         return None  # Will be skipped in PYTHONCODE.PY
     return math.sqrt(x)
 
+def safe_agg_min(arr):
+    """
+    Compute minimum of array values, ignoring NaN values.
+    
+    Args:
+        arr: Input array, list of values, or column name (string)
+        
+    Returns:
+        float: Minimum value in the array, ignoring NaN
+        
+    Note:
+        If arr is a string (column name) and _ALL_ROWS_CONTEXT is available,
+        extracts column values from all rows before computing minimum.
+    """
+    global _ALL_ROWS_CONTEXT
+    
+    # Check if arr is a string (column name) and we have access to all rows
+    if isinstance(arr, str) and _ALL_ROWS_CONTEXT is not None:
+        # Extract column values from all rows
+        values = []
+        for row in _ALL_ROWS_CONTEXT:
+            val = row.get(arr)
+            if val is not None:
+                try:
+                    values.append(float(val))
+                except (ValueError, TypeError):
+                    # Skip non-numeric values
+                    continue
+        
+        if not values:
+            return 0
+        
+        a = np.asarray(values, dtype=float)
+        return np.nanmin(a) if a.size else 0
+    
+    # Original behavior for arrays/lists
+    a = np.asarray(arr, dtype=float)
+    return np.nanmin(a) if a.size else 0
+
+def safe_agg_sum(arr):
+    """
+    Compute sum of array values, ignoring NaN values.
+    
+    Args:
+        arr: Input array, list of values, or column name (string)
+        
+    Returns:
+        float: Sum of values in the array, ignoring NaN
+        
+    Note:
+        If arr is a string (column name) and _ALL_ROWS_CONTEXT is available,
+        extracts column values from all rows before computing sum.
+    """
+    global _ALL_ROWS_CONTEXT
+    
+    # Check if arr is a string (column name) and we have access to all rows
+    if isinstance(arr, str) and _ALL_ROWS_CONTEXT is not None:
+        # Extract column values from all rows
+        values = []
+        for row in _ALL_ROWS_CONTEXT:
+            val = row.get(arr)
+            if val is not None:
+                try:
+                    values.append(float(val))
+                except (ValueError, TypeError):
+                    # Skip non-numeric values
+                    continue
+        
+        if not values:
+            return 0
+        
+        a = np.asarray(values, dtype=float)
+        return np.nansum(a)
+    
+    # Original behavior for arrays/lists
+    a = np.asarray(arr, dtype=float)
+    return np.nansum(a)
+
+def safe_agg_max(arr):
+    """
+    Compute maximum of array values, ignoring NaN values.
+    
+    Args:
+        arr: Input array, list of values, or column name (string)
+        
+    Returns:
+        float: Maximum value in the array, ignoring NaN
+        
+    Note:
+        If arr is a string (column name) and _ALL_ROWS_CONTEXT is available,
+        extracts column values from all rows before computing maximum.
+    """
+    global _ALL_ROWS_CONTEXT
+    
+    # Check if arr is a string (column name) and we have access to all rows
+    if isinstance(arr, str) and _ALL_ROWS_CONTEXT is not None:
+        # Extract column values from all rows
+        values = []
+        for row in _ALL_ROWS_CONTEXT:
+            val = row.get(arr)
+            if val is not None:
+                try:
+                    values.append(float(val))
+                except (ValueError, TypeError):
+                    # Skip non-numeric values
+                    continue
+        
+        if not values:
+            return 0
+        
+        a = np.asarray(values, dtype=float)
+        return np.nanmax(a) if a.size else 0
+    
+    # Original behavior for arrays/lists
+    a = np.asarray(arr, dtype=float)
+    return np.nanmax(a) if a.size else 0
+
+# Global variable to store all rows for COLUMN_SUM function
+_ALL_ROWS_CONTEXT = None
+
+def column_sum(column_name):
+    """
+    Compute sum of all values in a column across all rows.
+    Uses NumPy for fast vectorized computation.
+    
+    Args:
+        column_name: Name of the column to sum
+        
+    Returns:
+        float: Sum of all non-None values in the column
+        
+    Note:
+        This function uses the global _ALL_ROWS_CONTEXT variable
+        which is set before formula evaluation.
+    """
+    global _ALL_ROWS_CONTEXT
+    
+    if _ALL_ROWS_CONTEXT is None:
+        raise ValueError("COLUMN_SUM() can only be called within formula evaluation context")
+    
+    # Collect all non-None values from the column
+    values = []
+    for row in _ALL_ROWS_CONTEXT:
+        val = row.get(column_name)
+        if val is not None:
+            try:
+                values.append(float(val))
+            except (ValueError, TypeError):
+                # Skip non-numeric values
+                continue
+    
+    # Use NumPy for fast summation with NaN handling
+    if values:
+        return np.nansum(values)
+    return 0.0
+
 
 SAFE_FUNCTIONS = {
     "pow": safe_pow,
@@ -134,6 +290,10 @@ SAFE_FUNCTIONS = {
     "DOT": safe_dot,
     "NORM": safe_norm,
     "COUNT": safe_count,
+    "COLUMN_SUM": column_sum,
+    "AGG_MIN": safe_agg_min,
+    "AGG_SUM": safe_agg_sum,
+    "AGG_MAX": safe_agg_max,
 }
 
 # -----------------------------
@@ -245,7 +405,32 @@ class _SafeEvaluator(ast.NodeVisitor):
                 raise ValueError(f"Function '{fn_name}' is not allowed")
 
             fn = SAFE_FUNCTIONS[fn_name]
-            args = [self.visit(a) for a in node.args]
+            
+            # Special handling for aggregate functions that take column names
+            # For AGG_SUM, AGG_MIN, AGG_MAX, COLUMN_SUM functions,
+            # if the argument is a simple column name (ast.Name) AND
+            # we have access to all rows context, we pass the column name
+            # as a string instead of evaluating it.
+            if fn_name in ['AGG_SUM', 'AGG_MIN', 'AGG_MAX', 'COLUMN_SUM']:
+                args = []
+                for arg in node.args:
+                    if isinstance(arg, ast.Name):
+                        # Check if we have access to all rows context
+                        # We need to check _ALL_ROWS_CONTEXT which is a global
+                        # Import it here
+                        from formula_runtime import _ALL_ROWS_CONTEXT
+                        if _ALL_ROWS_CONTEXT is not None:
+                            # We have all rows context, so treat this as a column name
+                            args.append(arg.id)
+                        else:
+                            # No all rows context, evaluate normally (as variable)
+                            args.append(self.visit(arg))
+                    else:
+                        # For other expressions, evaluate normally
+                        args.append(self.visit(arg))
+            else:
+                # Normal evaluation for other functions
+                args = [self.visit(a) for a in node.args]
             
             # Debug logging for pow and sqrt functions
             if fn_name in ['pow', 'sqrt']:
@@ -257,9 +442,9 @@ class _SafeEvaluator(ast.NodeVisitor):
 
 
 # -----------------------------
-# PUBLIC API
+# PUBLIC API WITH COLUMN_SUM SUPPORT
 # -----------------------------
-def run_formula(expr: str, row: dict, aggregate_context: Optional[ColumnAggregateContext] = None):
+def run_formula(expr: str, row: dict, aggregate_context: Optional[ColumnAggregateContext] = None, all_rows: Optional[List[Dict]] = None):
     """
     Evaluate formula using cached AST with optional column aggregates.
     
@@ -267,15 +452,26 @@ def run_formula(expr: str, row: dict, aggregate_context: Optional[ColumnAggregat
         expr: Formula expression to evaluate
         row: Dictionary of row data
         aggregate_context: Optional column aggregates to inject into evaluation context
-    
+        all_rows: Optional list of all rows for COLUMN_SUM function
+        
     Returns:
         Evaluated result
     """
-    tree = _compile_expr(expr)
-    return _SafeEvaluator(row, aggregate_context).visit(tree)
+    global _ALL_ROWS_CONTEXT
+    
+    # Set global context for COLUMN_SUM function
+    original_context = _ALL_ROWS_CONTEXT
+    _ALL_ROWS_CONTEXT = all_rows
+    
+    try:
+        tree = _compile_expr(expr)
+        return _SafeEvaluator(row, aggregate_context).visit(tree)
+    finally:
+        # Restore original context
+        _ALL_ROWS_CONTEXT = original_context
 
 
-def run_formula_with_aggregates(expr: str, row: dict, aggregates: Optional[Dict[str, Any]] = None):
+def run_formula_with_aggregates(expr: str, row: dict, aggregates: Optional[Dict[str, Any]] = None, all_rows: Optional[List[Dict]] = None):
     """
     Convenience function to evaluate formula with column aggregates.
     
@@ -283,12 +479,13 @@ def run_formula_with_aggregates(expr: str, row: dict, aggregates: Optional[Dict[
         expr: Formula expression to evaluate
         row: Dictionary of row data
         aggregates: Dictionary of column aggregates to inject
-    
+        all_rows: Optional list of all rows for COLUMN_SUM function
+        
     Returns:
         Evaluated result
     """
     context = ColumnAggregateContext(aggregates) if aggregates else None
-    return run_formula(expr, row, context)
+    return run_formula(expr, row, context, all_rows)
 
 
 def extract_identifiers(expr: str):
@@ -322,7 +519,7 @@ def extract_aggregate_dependencies(expr: str) -> set:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             func_name = node.func.id
             # Check if this is an aggregate function
-            if func_name in ['SUM', 'AVG', 'COUNT', 'MIN', 'MAX']:
+            if func_name in ['SUM', 'AVG', 'COUNT', 'MIN', 'MAX', 'COLUMN_SUM', 'AGG_MIN', 'AGG_SUM', 'AGG_MAX']:
                 # For now, assume single column argument
                 for arg in node.args:
                     if isinstance(arg, ast.Name):
@@ -379,102 +576,21 @@ def classify_formulas(formulas: Dict[str, str]) -> Dict[str, Dict[str, str]]:
     }
 
 
-def execute_cvp_scenario(rows: List[Dict[str, Any]], formulas: Dict[str, str]) -> Dict[str, List[Any]]:
+class _RuntimeLayerViolation(RuntimeError):
+    """Raised when orchestration logic leaks into runtime layer."""
+    pass
+
+
+def execute_cvp_scenario(*args, **kwargs):
     """
-    Execute CVP formulas with automatic scenario mode detection.
-    
-    Implements three-phase execution:
-      PHASE 1: Row-level execution (compute all row formulas)
-      PHASE 2: Scenario-level execution (aggregate vectors, evaluate scenario formulas in order)
-      PHASE 3: Back-propagation (apply scenario scalars to rows)
-    
-    Args:
-        rows: List of row dictionaries
-        formulas: Dictionary of {target: expression}
-        
-    Returns:
-        Dictionary with results for each target column
+    DEPRECATED RUNTIME API
+
+    Scenario execution has moved to PYTHONCODE.PY orchestration layer.
+    formula_runtime.py is now evaluator-only.
+
+    This function remains only to prevent accidental usage.
     """
-    # Classify formulas
-    classified = classify_formulas(formulas)
-    row_formulas = classified['row_formulas']
-    scenario_formulas = classified['scenario_formulas']
-    
-    # If no scenario formulas, use standard row-by-row execution
-    if not scenario_formulas:
-        results = {target: [] for target in formulas.keys()}
-        for row in rows:
-            for target, expr in formulas.items():
-                result = run_formula(expr, row)
-                results[target].append(result)
-        return results
-    
-    # PHASE 1: Execute ALL row formulas first
-    # This ensures CM_J, X0_J, etc. are available for vector assembly
-    computed_rows = []
-    for row in rows:
-        row_copy = row.copy()
-        # Execute all row formulas (order doesn't matter as they don't use DOT/NORM)
-        for target, expr in row_formulas.items():
-            row_copy[target] = run_formula(expr, row_copy)
-        computed_rows.append(row_copy)
-    
-    # PHASE 2: Scenario-level execution
-    # Build scenario context with proper vector/scalar semantics
-    
-    # First, identify ALL variables referenced in scenario formulas
-    all_scenario_vars = set()
-    for expr in scenario_formulas.values():
-        all_scenario_vars.update(extract_identifiers(expr))
-    
-    # Build initial scenario context
-    scenario_context = {}
-    
-    # For each variable needed by scenario formulas:
-    for var in all_scenario_vars:
-        # Check if this variable appears in computed rows
-        if var in computed_rows[0]:
-            # This is a row-level variable that becomes a vector
-            # Collect values from all rows to form a vector
-            vector = []
-            for row in computed_rows:
-                vector.append(row[var])
-            scenario_context[var] = vector
-        else:
-            # This is a scenario-level scalar (like F)
-            # Take value from first row (should be same for all rows)
-            scenario_context[var] = rows[0].get(var, 0.0)
-    
-    # Execute scenario formulas in the order they are defined
-    # This respects the dependency order already present in the formula definitions
-    for target, expr in scenario_formulas.items():
-        # Evaluate formula using scenario context
-        result = run_formula(expr, scenario_context)
-        # Store result immediately so later formulas can reference it
-        scenario_context[target] = result
-    
-    # Extract scenario results (scalars) for back-propagation
-    scenario_results = {target: scenario_context[target] for target in scenario_formulas.keys()}
-    
-    # PHASE 3: Back-propagation to rows
-    # Apply scenario scalars to each row and compute final values
-    final_results = {target: [] for target in formulas.keys()}
-    
-    for row in computed_rows:
-        # Add scenario results to this row
-        for target, value in scenario_results.items():
-            row[target] = value
-        
-        # Re-evaluate any row formulas that depend on scenario results
-        for target, expr in row_formulas.items():
-            # Check if this formula depends on any scenario result
-            deps = extract_identifiers(expr)
-            if any(dep in scenario_results for dep in deps):
-                # Re-evaluate with scenario results included
-                row[target] = run_formula(expr, row)
-        
-        # Collect all results for this row
-        for target in formulas.keys():
-            final_results[target].append(row.get(target, None))
-    
-    return final_results
+
+    raise _RuntimeLayerViolation(
+        "execute_cvp_scenario moved to orchestration layer (PYTHONCODE.PY)"
+    )

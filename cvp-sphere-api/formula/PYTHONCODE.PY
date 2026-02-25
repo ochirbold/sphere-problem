@@ -160,6 +160,8 @@ def get_db_connection():
     if not db_user or not db_password:
         raise ValueError("Database credentials not found in environment variables")
     
+    print(f"[INFO] Connecting to Oracle DB: {db_host}:{db_port}/{db_sid}")
+    
     return oracledb.connect(
         user=db_user,
         password=db_password,
@@ -545,7 +547,7 @@ def main():
             # Execute Phase 1 row formulas in topological order
             for target in phase1_order:
                 try:
-                    val = run_formula(phase1_row_formulas[target], row_copy)
+                    val = run_formula(phase1_row_formulas[target], row_copy, all_rows=all_rows)
                     
                     # Skip if value is None (e.g., sqrt of negative number)
                     if val is None:
@@ -616,7 +618,7 @@ def main():
         scenario_results = {}
         for target in scenario_order:
             try:
-                val = run_formula(scenario_formulas[target], scenario_context)
+                val = run_formula(scenario_formulas[target], scenario_context, all_rows=all_rows)
                 scenario_context[target] = val
                 scenario_results[target] = val
                 print(f"[SCENARIO] {target} = {val}")
@@ -641,7 +643,7 @@ def main():
                 deps = extract_identifiers(phase3_row_formulas[target])
                 if any(dep in scenario_results for dep in deps):
                     try:
-                        val = run_formula(phase3_row_formulas[target], row)
+                        val = run_formula(phase3_row_formulas[target], row, all_rows=all_rows)
                         row[target] = val
                     except Exception as e:
                         error_msg = f"Propagation error: {e}"
@@ -674,7 +676,7 @@ def main():
             # Execute all formulas in topological order
             for target in all_order:
                 try:
-                    val = run_formula(formulas[target], row_copy)
+                    val = run_formula(formulas[target], row_copy, all_rows=all_rows)
                     
                     # Skip if value is None (e.g., sqrt of negative number)
                     if val is None:
