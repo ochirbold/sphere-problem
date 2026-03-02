@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pythoncode.py - CVP Formula Execution Engine
+pythoncode.py - CVP Formula Execution Engine with LP Optimization
 
 This module provides database-driven formula execution for CVP analysis.
 It supports three modes:
@@ -8,11 +8,18 @@ It supports three modes:
 2. Manual mode: Specify table and formulas manually
 3. Legacy mode: Backward compatibility with manual mapping
 
+New feature: LP Optimization Extension
+- Detects LP formulas in scenario context
+- Builds LP matrices from formulas
+- Solves LP problems using scipy.optimize.linprog
+- Integrates results back into scenario context
+
 Refactored version with improvements:
 - PEP8 compliance
 - Better error handling
 - Improved logging
 - Cleaner code structure
+- LP optimization support
 """
 
 import sys
@@ -24,6 +31,17 @@ from typing import Dict, List, Tuple, Optional, Any, Set
 
 # Import from the updated formula_runtime
 from formula_runtime import run_formula, extract_identifiers, detect_scenario_functions
+
+# Import LP optimization modules
+try:
+    from lp_model_parser import LPModelParser, detect_lp_components
+    from lp_matrix_builder import LPMatrixBuilder, build_cvp_matrices
+    from lp_solver import LPSolver, solve_lp_from_matrices
+    LP_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARNING] LP optimization modules not available: {e}")
+    print("[WARNING] LP optimization will be disabled")
+    LP_AVAILABLE = False
 
 
 # ============================================================================
@@ -255,6 +273,85 @@ def generate_auto_mapping(formulas: Dict[str, str]) -> Dict[str, str]:
     return {ident: ident for ident in sorted(column_identifiers)}
 
 
+def execute_lp_optimization(
+    scenario_context: Dict[str, Any],
+    formulas: Dict[str, str]
+) -> Dict[str, Any]:
+    """
+    Execute LP optimization if LP formulas are detected.
+    
+    Args:
+        scenario_context: Current scenario context with vector data
+        formulas: All formulas in the scenario
+        
+    Returns:
+        Updated scenario context with LP optimization results
+    """
+    if not LP_AVAILABLE:
+        print("[INFO] LP optimization modules not available, skipping LP optimization")
+        return scenario_context
+    
+    try:
+        # Detect LP components in formulas
+        parser = LPModelParser()
+        lp_spec = parser.detect_lp_formulas(formulas)
+        
+        if not lp_spec['is_lp_problem']:
+            print("[INFO] No LP problem detected in formulas")
+            return scenario_context
+        
+        print(f"[LP OPTIMIZATION] LP problem detected with variables: {lp_spec['variables']}")
+        print(f"[LP OPTIMIZATION] Objective: {lp_spec['objective']}")
+        print(f"[LP OPTIMIZATION] Constraints: {lp_spec['constraints']}")
+        print(f"[LP OPTIMIZATION] Bounds: {lp_spec['bounds']}")
+        
+        # Build LP matrices
+        builder = LPMatrixBuilder(scenario_context)
+        lp_matrices = builder.build_from_formulas(formulas, lp_spec)
+        
+        print(f"[LP OPTIMIZATION] Built LP matrices:")
+        print(f"  Variables: {lp_matrices['variables']}")
+        print(f"  c vector: {lp_matrices['c']}")
+        print(f"  A_ub shape: {len(lp_matrices['A_ub'])}x{len(lp_matrices['A_ub'][0]) if lp_matrices['A_ub'] else 0}")
+        print(f"  b_ub length: {len(lp_matrices['b_ub'])}")
+        
+        # Solve LP problem
+        solver = LPSolver()
+        result = solver.solve_from_matrices(lp_matrices, maximize=True)
+        
+        print(f"[LP OPTIMIZATION] LP solution:")
+        print(f"  Success: {result['success']}")
+        print(f"  Message: {result['message']}")
+        
+        if result['success']:
+            # Add LP solution to scenario context
+            for i, var_name in enumerate(lp_matrices['variables']):
+                scenario_context[var_name] = result['x'][i]
+                print(f"  {var_name} = {result['x'][i]}")
+            
+            # Add objective value
+            if lp_spec['objective']:
+                scenario_context[lp_spec['objective']] = result['fun']
+                print(f"  Objective value = {result['fun']}")
+            
+            # Add solver information
+            scenario_context['_lp_solution'] = result
+            print(f"[LP OPTIMIZATION] LP optimization completed successfully")
+        else:
+            print(f"[LP OPTIMIZATION] LP optimization failed: {result['message']}")
+            # Add error information to context
+            scenario_context['_lp_error'] = result
+        
+        return scenario_context
+        
+    except Exception as e:
+        print(f"[ERROR] LP optimization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return original context without LP results
+        return scenario_context
+
+
 def classify_and_execute_formulas(
     formulas: Dict[str, str],
     all_rows: List[Dict[str, Any]],
@@ -422,6 +519,15 @@ def classify_and_execute_formulas(
                 for row_id in row_ids:
                     errors.append((row_id, target, error_msg))
                 print(f"[ERROR] Scenario formula {target}: {error_msg}")
+        
+        # Execute LP optimization if LP formulas are detected
+        scenario_context = execute_lp_optimization(scenario_context, formulas)
+        
+        # Update scenario_results with any LP optimization results
+        for key, value in scenario_context.items():
+            if key not in scenario_results and not key.startswith('_'):
+                scenario_results[key] = value
+                print(f"[LP RESULT] {key} = {value}")
         
         # PHASE 3: Propagation back to rows
         print("[PHASE 3] Propagating scenario results to rows...")
