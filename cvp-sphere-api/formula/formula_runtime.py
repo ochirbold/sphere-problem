@@ -309,8 +309,245 @@ def column_sum(column_name: str) -> float:
 
 
 # ============================================================================
-# LINEAR PROGRAMMING FUNCTION
+# LINEAR PROGRAMMING FUNCTIONS - PROJECT-SPECIFIC INTEGRATION
 # ============================================================================
+
+def _solve_linear_program(
+    objective_coeffs: Vector,
+    constraint_matrix: Optional[Matrix] = None,
+    constraint_values: Optional[Vector] = None,
+    equality_matrix: Optional[Matrix] = None,
+    equality_values: Optional[Vector] = None,
+    variable_bounds: Optional[Bounds] = None,
+    maximize: bool = False
+) -> Dict[str, Any]:
+    """
+    Internal linear programming solver that aligns with our project's needs.
+    
+    This function provides a bridge between our formula engine and scipy's linprog,
+    with parameter names that make sense in our context.
+    
+    Args:
+        objective_coeffs: Coefficients for the objective function
+        constraint_matrix: Matrix for inequality constraints (A * x <= b)
+        constraint_values: Right-hand side values for inequality constraints
+        equality_matrix: Matrix for equality constraints (A_eq * x == b_eq)
+        equality_values: Right-hand side values for equality constraints
+        variable_bounds: Bounds for each variable [(min, max), ...]
+        maximize: If True, maximize the objective; if False, minimize
+        
+    Returns:
+        Dictionary with optimization results
+    """
+    try:
+        from scipy.optimize import linprog
+    except ImportError:
+        raise ImportError(
+            "Linear programming requires scipy library. "
+            "Install with: pip install scipy"
+        )
+    
+    # Convert inputs to numpy arrays
+    c = np.asarray(objective_coeffs, dtype=float)
+    
+    # If maximizing, negate the objective coefficients (linprog minimizes)
+    if maximize:
+        c = -c
+    
+    A_ub = np.asarray(constraint_matrix, dtype=float) if constraint_matrix is not None else None
+    b_ub = np.asarray(constraint_values, dtype=float) if constraint_values is not None else None
+    A_eq = np.asarray(equality_matrix, dtype=float) if equality_matrix is not None else None
+    b_eq = np.asarray(equality_values, dtype=float) if equality_values is not None else None
+    
+    # Solve the linear programming problem
+    result = linprog(
+        c=c,
+        A_ub=A_ub,
+        b_ub=b_ub,
+        A_eq=A_eq,
+        b_eq=b_eq,
+        bounds=variable_bounds,
+        method='highs'
+    )
+    
+    # Adjust objective value if we were maximizing
+    if maximize and result.fun is not None:
+        result.fun = -result.fun
+    
+    return {
+        'success': result.success,
+        'x': result.x.tolist() if result.x is not None else None,
+        'objective_value': result.fun,
+        'message': result.message,
+        'status': result.status,
+        'iterations': result.nit,
+        'slack': result.slack.tolist() if result.slack is not None else None,
+        'equality_residuals': result.con.tolist() if result.con is not None else None
+    }
+
+
+def optimize_production(
+    profit_margins: Vector,
+    resource_requirements: Matrix,
+    resource_limits: Vector,
+    min_production: Optional[Vector] = None,
+    max_production: Optional[Vector] = None
+) -> Dict[str, Any]:
+    """
+    Optimize production quantities to maximize profit given resource constraints.
+    
+    This function solves the classic production planning problem:
+    Maximize: Σ profit_margins[i] * x[i]
+    Subject to: Σ resource_requirements[j][i] * x[i] ≤ resource_limits[j]
+                min_production[i] ≤ x[i] ≤ max_production[i]
+    
+    Args:
+        profit_margins: Profit per unit for each product
+        resource_requirements: Matrix where row j is resource usage for product i
+        resource_limits: Maximum available resources
+        min_production: Minimum production quantities (default: 0)
+        max_production: Maximum production quantities (default: unlimited)
+        
+    Returns:
+        Dictionary with optimization results including:
+            - success: Whether optimization succeeded
+            - production_quantities: Optimal production quantities
+            - total_profit: Maximum achievable profit
+            - resource_usage: Actual resource usage
+            - slack: Unused resources
+    """
+    # Validate inputs
+    n_products = len(profit_margins)
+    n_resources = len(resource_limits)
+    
+    if len(resource_requirements) != n_resources:
+        raise ValueError(
+            f"Resource requirements must have {n_resources} rows (one per resource), "
+            f"got {len(resource_requirements)}"
+        )
+    
+    for i, row in enumerate(resource_requirements):
+        if len(row) != n_products:
+            raise ValueError(
+                f"Row {i} of resource_requirements must have {n_products} columns, "
+                f"got {len(row)}"
+            )
+    
+    # Set default bounds
+    if min_production is None:
+        min_production = [0.0] * n_products
+    if max_production is None:
+        max_production = [None] * n_products
+    
+    # Create bounds list - handle None values properly
+    bounds: Bounds = []
+    for i in range(n_products):
+        min_val: Optional[Number] = min_production[i] if min_production is not None else 0.0
+        max_val: Optional[Number] = max_production[i] if max_production is not None else None
+        bounds.append((min_val, max_val))
+    
+    # Solve the optimization problem
+    result = _solve_linear_program(
+        objective_coeffs=profit_margins,
+        constraint_matrix=resource_requirements,
+        constraint_values=resource_limits,
+        variable_bounds=bounds,
+        maximize=True
+    )
+    
+    # Add additional information to the result
+    if result['success'] and result['x'] is not None:
+        x = np.array(result['x'])
+        result['production_quantities'] = result['x']
+        result['total_profit'] = result['objective_value']
+        
+        # Calculate resource usage
+        if resource_requirements:
+            A = np.array(resource_requirements)
+            resource_usage = A @ x
+            result['resource_usage'] = resource_usage.tolist()
+        else:
+            result['resource_usage'] = []
+    
+    return result
+
+
+def allocate_resources(
+    requirements: Matrix,
+    available_resources: Vector,
+    priorities: Optional[Vector] = None
+) -> Dict[str, Any]:
+    """
+    Allocate limited resources to multiple activities based on requirements and priorities.
+    
+    This function solves resource allocation problems where:
+    Minimize: Σ priorities[i] * unused_resources[i] (or maximize utilization)
+    Subject to: Σ requirements[i][j] * allocation[j] ≤ available_resources[i]
+    
+    Args:
+        requirements: Matrix where row i is resource requirements for activity j
+        available_resources: Total available resources
+        priorities: Priority weights for resource utilization (default: equal)
+        
+    Returns:
+        Dictionary with allocation results
+    """
+    n_resources = len(available_resources)
+    n_activities = len(requirements[0]) if requirements else 0
+    
+    if priorities is None:
+        priorities = [1.0] * n_resources
+    
+    if len(priorities) != n_resources:
+        raise ValueError(
+            f"Priorities must have {n_resources} elements, got {len(priorities)}"
+        )
+    
+    # We want to minimize unused resources (weighted by priorities)
+    # unused_resources[i] = available_resources[i] - Σ requirements[i][j] * allocation[j]
+    # This is equivalent to maximizing utilization
+    
+    # Convert to standard LP form
+    # Minimize: Σ priorities[i] * unused_resources[i]
+    # Subject to: Σ requirements[i][j] * allocation[j] + unused_resources[i] = available_resources[i]
+    
+    n_variables = n_activities + n_resources
+    c = [0.0] * n_activities + list(priorities)  # Objective coefficients
+    
+    # Create equality constraints
+    A_eq = []
+    b_eq = []
+    
+    for i in range(n_resources):
+        row = [0.0] * n_variables
+        # Allocation variables
+        for j in range(n_activities):
+            row[j] = requirements[i][j]
+        # Unused resource variable for this resource
+        row[n_activities + i] = 1.0
+        A_eq.append(row)
+        b_eq.append(available_resources[i])
+    
+    # Variable bounds: allocations ≥ 0, unused resources ≥ 0
+    bounds = [(0.0, None)] * n_variables
+    
+    result = _solve_linear_program(
+        objective_coeffs=c,
+        equality_matrix=A_eq,
+        equality_values=b_eq,
+        variable_bounds=bounds,
+        maximize=False
+    )
+    
+    # Format the result
+    if result['success'] and result['x'] is not None:
+        x = result['x']
+        result['allocations'] = x[:n_activities]
+        result['unused_resources'] = x[n_activities:]
+        result['utilization_rate'] = 1.0 - sum(result['unused_resources']) / sum(available_resources)
+    
+    return result
+
 
 def safe_linprog(
     c: Vector,
@@ -319,9 +556,12 @@ def safe_linprog(
     A_eq: Optional[Matrix] = None,
     b_eq: Optional[Vector] = None,
     bounds: Optional[Bounds] = None
-) -> LinprogResult:
+) -> Dict[str, Any]:
     """
-    Safe wrapper for scipy.optimize.linprog linear programming solver.
+    General-purpose linear programming solver (backward compatibility).
+    
+    This function provides direct access to scipy's linprog for advanced users,
+    while maintaining compatibility with existing code.
     
     Args:
         c: Coefficients of the linear objective function to be minimized
@@ -332,57 +572,17 @@ def safe_linprog(
         bounds: Sequence of (min, max) pairs for each variable
         
     Returns:
-        Dictionary with solution results:
-            - success: Boolean indicating if optimization succeeded
-            - x: Solution vector as list
-            - fun: Optimal value of the objective function
-            - message: Status message
-            - status: Numerical status code
-            - nit: Number of iterations
-            - slack: Slack variables for inequality constraints
-            - con: Residuals for equality constraints
-            
-    Raises:
-        ImportError: If scipy is not installed
+        Dictionary with solution results
     """
-    try:
-        from scipy.optimize import linprog
-    except ImportError:
-        raise ImportError(
-            "scipy.optimize.linprog requires scipy library. "
-            "Install with: pip install scipy"
-        )
-    
-    # Convert inputs to numpy arrays if they are lists
-    c_arr = np.asarray(c, dtype=float)
-    
-    A_ub_arr = np.asarray(A_ub, dtype=float) if A_ub is not None else None
-    b_ub_arr = np.asarray(b_ub, dtype=float) if b_ub is not None else None
-    A_eq_arr = np.asarray(A_eq, dtype=float) if A_eq is not None else None
-    b_eq_arr = np.asarray(b_eq, dtype=float) if b_eq is not None else None
-    
-    # Solve the linear programming problem
-    result = linprog(
-        c=c_arr,
-        A_ub=A_ub_arr,
-        b_ub=b_ub_arr,
-        A_eq=A_eq_arr,
-        b_eq=b_eq_arr,
-        bounds=bounds,
-        method='highs'  # Use HiGHS solver (default in newer scipy)
+    return _solve_linear_program(
+        objective_coeffs=c,
+        constraint_matrix=A_ub,
+        constraint_values=b_ub,
+        equality_matrix=A_eq,
+        equality_values=b_eq,
+        variable_bounds=bounds,
+        maximize=False
     )
-    
-    # Return a simplified result dictionary
-    return {
-        'success': result.success,
-        'x': result.x.tolist() if result.x is not None else None,
-        'fun': result.fun,
-        'message': result.message,
-        'status': result.status,
-        'nit': result.nit,  # Number of iterations
-        'slack': result.slack.tolist() if result.slack is not None else None,
-        'con': result.con.tolist() if result.con is not None else None
-    }
 
 
 # ============================================================================
@@ -405,6 +605,8 @@ SAFE_FUNCTIONS: Dict[str, Callable] = {
     "AGG_SUM": safe_agg_sum,
     "AGG_MAX": safe_agg_max,
     "linprog": safe_linprog,
+    "OPTIMIZE_PRODUCTION": optimize_production,
+    "ALLOCATE_RESOURCES": allocate_resources,
 }
 
 
