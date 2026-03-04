@@ -586,6 +586,107 @@ def safe_linprog(
 
 
 # ============================================================================
+# LP DSL FUNCTIONS
+# ============================================================================
+
+def vector(x: Any) -> List[float]:
+    """
+    Explicitly construct vectors for scenario calculations.
+    
+    Behavior:
+    1. If input is already list/tuple/np.ndarray -> return list
+    2. If scalar row column -> collect values from rows (requires all_rows context)
+    3. Otherwise -> return [x] as single-element list
+    
+    Args:
+        x: Input value (scalar, list, or column name)
+        
+    Returns:
+        List of float values
+        
+    Note:
+        When used in row context with column name, requires all_rows context
+        to be available via _ALL_ROWS_CONTEXT global variable.
+    """
+    global _ALL_ROWS_CONTEXT
+    
+    # Case 1: Already a list-like object
+    if isinstance(x, (list, tuple, np.ndarray)):
+        return [float(v) for v in x]
+    
+    # Case 2: String that might be a column name with all_rows context
+    if isinstance(x, str) and _ALL_ROWS_CONTEXT is not None:
+        # Try to extract column values
+        values = []
+        for row in _ALL_ROWS_CONTEXT:
+            val = row.get(x)
+            if val is not None:
+                try:
+                    values.append(float(val))
+                except (ValueError, TypeError):
+                    # Skip non-numeric values
+                    continue
+        if values:
+            return values
+    
+    # Case 3: Single value (scalar)
+    try:
+        return [float(x)]
+    except (ValueError, TypeError):
+        # If can't convert to float, return empty list
+        return []
+
+
+def DECISION(variable_name: str, size: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Declare LP decision variables dynamically.
+    
+    Args:
+        variable_name: Name of the decision variable
+        size: Optional size for vector variables (e.g., size=N for x1..xN)
+        
+    Returns:
+        Metadata structure for LP model parser
+    """
+    return {
+        "__lp_decision__": variable_name,
+        "__lp_size__": size
+    }
+
+
+def OBJECTIVE(expression: Any) -> Dict[str, Any]:
+    """
+    Declare LP objective expression.
+    
+    Args:
+        expression: Objective function expression
+        
+    Returns:
+        Metadata structure for LP model parser
+    """
+    return {
+        "__lp_objective__": expression
+    }
+
+
+def BOUND(variable: str, lower: Optional[float], upper: Optional[float]) -> Dict[str, Any]:
+    """
+    Declare variable bounds.
+    
+    Args:
+        variable: Variable name
+        lower: Lower bound (None for no lower bound)
+        upper: Upper bound (None for no upper bound)
+        
+    Returns:
+        Metadata structure for LP model parser
+    """
+    return {
+        "__lp_bound__": (variable, lower, upper)
+    }
+
+
+# ============================================================================
 # SAFE FUNCTIONS DICTIONARY
 # ============================================================================
 
@@ -607,6 +708,11 @@ SAFE_FUNCTIONS: Dict[str, Callable] = {
     "linprog": safe_linprog,
     "OPTIMIZE_PRODUCTION": optimize_production,
     "ALLOCATE_RESOURCES": allocate_resources,
+    # LP DSL functions
+    "vector": vector,
+    "DECISION": DECISION,
+    "OBJECTIVE": OBJECTIVE,
+    "BOUND": BOUND,
 }
 
 
@@ -787,6 +893,10 @@ class _SafeEvaluator(ast.NodeVisitor):
         
         elif isinstance(node, ast.Constant):
             return node.value
+        
+        elif isinstance(node, ast.List):
+            # Handle list literals like [1, 2, 3]
+            return [self.visit(element) for element in node.elts]
         
         elif isinstance(node, ast.Name):
             return self._get_value(node.id)

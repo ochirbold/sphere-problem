@@ -18,6 +18,7 @@ Responsibilities:
 import re
 from typing import Dict, List, Tuple, Optional, Any, Set
 import ast
+import html
 
 
 # ============================================================================
@@ -78,12 +79,24 @@ class LPModelParser:
                 - variables: List of decision variable names found
                 - is_lp_problem: Boolean indicating if LP problem detected
                 - lp_formulas: List of all formula names involved in LP
+                - dsl_structures: Dictionary of DSL structures detected
         """
         # Extract all variables from all formulas
         all_variables = self._extract_all_variables(scenario_formulas)
         
-        # Identify decision variables
+        # Identify decision variables (including DSL DECISION() calls)
         decision_vars = self._identify_decision_variables(all_variables)
+        
+        # Detect DSL structures
+        dsl_structures = self._detect_dsl_structures(scenario_formulas)
+        
+        # Add decision variables from DSL (including vector variables)
+        for dsl_type, dsl_data in dsl_structures.items():
+            if dsl_type == 'decision':
+                for var_info in dsl_data:
+                    vector_vars = var_info.get('vector_variables', [])
+                    for var_name in vector_vars:
+                        decision_vars.add(var_name)
         
         # If no decision variables found, not an LP problem
         if not decision_vars:
@@ -93,18 +106,28 @@ class LPModelParser:
                 'bounds': [],
                 'variables': [],
                 'is_lp_problem': False,
-                'lp_formulas': []
+                'lp_formulas': [],
+                'dsl_structures': dsl_structures
             }
         
-        # Classify formulas based on content
-        objective_formula = self._find_objective_formula(scenario_formulas, decision_vars)
+        # Classify formulas based on content (including DSL)
+        objective_formula = self._find_objective_formula(scenario_formulas, decision_vars, dsl_structures)
         constraint_formulas = self._find_constraint_formulas(scenario_formulas, decision_vars)
         bound_formulas = self._find_bound_formulas(scenario_formulas, decision_vars)
+        
+        # Add DSL bounds
+        if 'bound' in dsl_structures:
+            for bound_info in dsl_structures['bound']:
+                var_name = bound_info.get('variable')
+                if var_name in decision_vars:
+                    # Create a synthetic bound formula name
+                    bound_name = f"__dsl_bound_{var_name}"
+                    bound_formulas.append(bound_name)
         
         # Determine if this is an LP problem
         is_lp_problem = (
             len(decision_vars) > 0 and 
-            (objective_formula is not None or len(constraint_formulas) > 0)
+            (objective_formula is not None or len(constraint_formulas) > 0 or 'objective' in dsl_structures)
         )
         
         # Collect all LP-related formulas
@@ -120,7 +143,8 @@ class LPModelParser:
             'bounds': bound_formulas,
             'variables': sorted(decision_vars),
             'is_lp_problem': is_lp_problem,
-            'lp_formulas': lp_formulas
+            'lp_formulas': lp_formulas,
+            'dsl_structures': dsl_structures
         }
     
     def extract_decision_variables(
@@ -194,10 +218,116 @@ class LPModelParser:
         
         return decision_vars
     
+    def _detect_dsl_structures(
+        self,
+        formulas: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """
+        Detect DSL structures in formulas.
+        
+        Args:
+            formulas: Dictionary of target:expression formulas
+            
+        Returns:
+            Dictionary containing detected DSL structures:
+                - decision: List of DECISION() calls
+                - objective: List of OBJECTIVE() calls  
+                - bound: List of BOUND() calls
+        """
+        dsl_structures = {
+            'decision': [],
+            'objective': [],
+            'bound': []
+        }
+        
+        for target, expr in formulas.items():
+            # Look for DECISION() calls with optional size parameter
+            decision_matches = re.findall(r'DECISION\s*\(\s*([^,)]+)(?:\s*,\s*size\s*=\s*(\d+))?\s*\)', expr, re.IGNORECASE)
+            for match in decision_matches:
+                var_name = match[0].strip()
+                size_str = match[1].strip() if match[1] else None
+                size = int(size_str) if size_str and size_str.isdigit() else None
+                
+                # Generate vector variable names if size is specified
+                vector_variables = []
+                if size and size > 1:
+                    vector_variables = [f"{var_name}{i+1}" for i in range(size)]
+                else:
+                    # Scalar variable
+                    vector_variables = [var_name]
+                
+                dsl_structures['decision'].append({
+                    'variable_name': var_name,
+                    'size': size,
+                    'vector_variables': vector_variables,
+                    'formula': target
+                })
+            
+            # Look for OBJECTIVE() calls - match everything inside parentheses
+            # Use pattern that matches balanced parentheses
+            # Try to find the full expression by counting parentheses
+            start_pos = expr.find('OBJECTIVE(')
+            if start_pos != -1:
+                start_pos += len('OBJECTIVE(')
+                paren_count = 1
+                current_pos = start_pos
+                while current_pos < len(expr) and paren_count > 0:
+                    if expr[current_pos] == '(':
+                        paren_count += 1
+                    elif expr[current_pos] == ')':
+                        paren_count -= 1
+                    current_pos += 1
+                
+                if paren_count == 0:
+                    expression = expr[start_pos:current_pos-1].strip()
+                    dsl_structures['objective'].append({
+                        'expression': expression,
+                        'formula': target
+                    })
+            
+            # Look for BOUND() calls
+            bound_matches = re.findall(r'BOUND\s*\(\s*([^,)]+)\s*,\s*([^,)]+)\s*,\s*([^)]+)\s*\)', expr, re.IGNORECASE)
+            for match in bound_matches:
+                var_name = match[0].strip()
+                lower = match[1].strip()
+                upper = match[2].strip()
+                
+                # Parse lower and upper bounds
+                lower_val = self._parse_bound_value(lower)
+                upper_val = self._parse_bound_value(upper)
+                
+                dsl_structures['bound'].append({
+                    'variable': var_name,
+                    'lower': lower_val,
+                    'upper': upper_val,
+                    'formula': target
+                })
+        
+        return dsl_structures
+    
+    def _parse_bound_value(self, value_str: str) -> Optional[float]:
+        """
+        Parse bound value string to float or None.
+        
+        Args:
+            value_str: String representation of bound value
+            
+        Returns:
+            Float value or None if string is 'None' or empty
+        """
+        value_str = value_str.strip()
+        if value_str.upper() == 'NONE' or value_str == '':
+            return None
+        try:
+            return float(value_str)
+        except ValueError:
+            return None
+    
     def _find_objective_formula(
         self,
         formulas: Dict[str, str],
-        decision_vars: Set[str]
+        decision_vars: Set[str],
+        dsl_structures: Dict[str, Any]
     ) -> Optional[str]:
         """
         Find the objective function formula.
@@ -205,10 +335,16 @@ class LPModelParser:
         Args:
             formulas: Dictionary of formulas
             decision_vars: Set of decision variable names
+            dsl_structures: Dictionary of DSL structures
             
         Returns:
             Name of objective formula, or None if not found
         """
+        # Check DSL objectives first
+        if 'objective' in dsl_structures and dsl_structures['objective']:
+            # Return the first objective formula with DSL
+            return dsl_structures['objective'][0]['formula']
+        
         # First pass: look for formulas containing objective keywords
         for target, expr in formulas.items():
             expr_lower = expr.lower()
@@ -253,18 +389,21 @@ class LPModelParser:
         constraints = []
         
         for target, expr in formulas.items():
+            # First, decode HTML entities in the expression using html.unescape
+            decoded_expr = html.unescape(expr)
+            
             # Check if formula contains comparison operators
-            if any(op in expr for op in ['<=', '>=', '==', '<', '>']):
+            if any(op in decoded_expr for op in ['<=', '>=', '==', '<', '>']):
                 # Verify it contains decision variables
-                if self._contains_decision_variables(expr, decision_vars):
+                if self._contains_decision_variables(decoded_expr, decision_vars):
                     constraints.append(target)
             
             # Also check for constraint keywords
             else:
-                expr_lower = expr.lower()
+                expr_lower = decoded_expr.lower()
                 for keyword in self.constraint_keywords:
                     if keyword in expr_lower:
-                        if self._contains_decision_variables(expr, decision_vars):
+                        if self._contains_decision_variables(decoded_expr, decision_vars):
                             constraints.append(target)
                             break
         

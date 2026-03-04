@@ -35,8 +35,8 @@ from formula_runtime import run_formula, extract_identifiers, detect_scenario_fu
 # Import LP optimization modules
 try:
     from lp_model_parser import LPModelParser, detect_lp_components
-    from lp_matrix_builder import LPMatrixBuilder, build_cvp_matrices
-    from lp_solver import LPSolver, solve_lp_from_matrices
+    from lp_matrix_builder_deterministic_complete import LPMatrixBuilder
+    from lp_solver import LPSolver
     LP_AVAILABLE = True
 except ImportError as e:
     print(f"[WARNING] LP optimization modules not available: {e}")
@@ -180,6 +180,217 @@ def normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================================
+# PRODUCTION HARDENING FUNCTIONS
+# ============================================================================
+
+def check_unsafe_formulas(formulas: Dict[str, str]) -> List[str]:
+    """
+    Check formulas for unsafe operations.
+    
+    Args:
+        formulas: Dictionary of target:expression formulas
+        
+    Returns:
+        List of unsafe formula targets, empty if all formulas are safe
+    """
+    unsafe_keywords = ['import', 'exec', 'eval', 'open', 'os.', 'sys.', '__']
+    unsafe_formulas = []
+    
+    for target, expr in formulas.items():
+        expr_lower = expr.lower()
+        for keyword in unsafe_keywords:
+            if keyword in expr_lower:
+                unsafe_formulas.append(target)
+                break
+    
+    return unsafe_formulas
+
+
+def is_dsl_construct(expression: str) -> bool:
+    """
+    Check if expression is a DSL construct that should not be executed as a normal formula.
+    
+    DSL constructs that should be skipped from execution:
+    - DECISION(...) - declares LP decision variables
+    - BOUND(...) - declares variable bounds
+    - OBJECTIVE(...) - declares objective function
+    - CONSTRAINT expressions (containing <=, >=, ==, <, >) - LP constraints
+    
+    Note: vector(...) is NOT a DSL construct - it's a regular function that should be executed.
+    
+    Args:
+        expression: Formula expression string
+        
+    Returns:
+        True if expression is a DSL construct, False otherwise
+    """
+    expr = expression.strip()
+    
+    # Check for DSL function calls (case-insensitive)
+    # Only DECISION, BOUND, and OBJECTIVE are DSL constructs that should be skipped
+    dsl_keywords = ['DECISION(', 'BOUND(', 'OBJECTIVE(']
+    expr_upper = expr.upper()
+    for keyword in dsl_keywords:
+        if keyword in expr_upper:
+            return True
+    
+    # Check for constraint expressions (LP constraints)
+    # Handle different spacing variations: <=, <= ,  <=, etc.
+    # Also handle < and > separately in case formula has < = with space
+    # Also handle = (single equals) for equality constraints
+    # Also handle HTML-encoded operators: <=, >=, <, >
+    constraint_operators = ['<=', '>=', '==', '< =', '> =', '= =', ' = ']
+    
+    # First check for operators with possible spaces
+    for op in constraint_operators:
+        if op in expr:
+            return True
+    
+    # Check for HTML-encoded operators
+    html_operators = ['<=', '>=', '<', '>', '< =', '> =']
+    for op in html_operators:
+        if op in expr:
+            return True
+    
+    # Also check for < and > operators (they might be used in constraints too)
+    # But only if they're not part of other operators like <= or >=
+    expr_no_spaces = expr.replace(' ', '')
+    if ('<' in expr_no_spaces and '<=' not in expr_no_spaces) or \
+       ('>' in expr_no_spaces and '>=' not in expr_no_spaces) or \
+       ('=' in expr_no_spaces and '==' not in expr_no_spaces and '>=' not in expr_no_spaces and '<=' not in expr_no_spaces):
+        # Check if <, >, or = is not part of a function name or variable name
+        # Simple check: look for pattern where operator is between two expressions
+        # This is a simplified check - in practice, we should parse the expression
+        # But for now, we'll assume any <, >, or = in a formula is a constraint
+        # (unless it's part of a compound operator like <=, >=, ==)
+        return True
+    
+    return False
+
+
+def is_scenario_level_formula(target: str, expression: str) -> bool:
+    """
+    Determine if a formula should be executed at scenario level (Phase 2).
+    
+    Scenario-level formulas include:
+    1. DSL constructs (DECISION, BOUND, OBJECTIVE, vector)
+    2. CONSTRAINT expressions
+    3. Formulas containing vector operations (DOT, NORM)
+    4. Formulas that depend only on scenario-level variables
+    
+    Args:
+        target: Formula target name
+        expression: Formula expression
+        
+    Returns:
+        True if formula should be executed at scenario level, False for row level
+    """
+    # Check for DSL constructs
+    if is_dsl_construct(expression):
+        return True
+    
+    # Check for vector/scenario functions
+    scenario_functions = ['DOT(', 'NORM(', 'vector(']
+    expr_upper = expression.upper()
+    for func in scenario_functions:
+        if func in expr_upper:
+            return True
+    
+    return False
+
+
+# Simple in-memory cache for LP solutions
+_lp_cache = {}
+_cache_hits = 0
+_cache_misses = 0
+
+
+def generate_cache_key(scenario_context: Dict[str, Any], lp_matrices: Dict[str, Any]) -> str:
+    """
+    Generate a cache key for LP solution.
+    
+    Args:
+        scenario_context: Scenario context dictionary
+        lp_matrices: LP matrices dictionary
+        
+    Returns:
+        Cache key string
+    """
+    # Create a simplified representation for caching
+    key_parts = []
+    
+    # Include scenario context values (sorted for consistency)
+    for key in sorted(scenario_context.keys()):
+        value = scenario_context[key]
+        if value is None:
+            key_parts.append(f"{key}:None")
+        elif isinstance(value, (int, float)):
+            key_parts.append(f"{key}:{value:.6f}")
+        elif isinstance(value, list):
+            # Use first few values for vector representation
+            if value:
+                # Check if first element is None
+                if value[0] is None:
+                    key_parts.append(f"{key}:{len(value)}:None")
+                else:
+                    key_parts.append(f"{key}:{len(value)}:{value[0]:.6f}")
+    
+    # Include LP matrix dimensions
+    key_parts.append(f"c:{len(lp_matrices.get('c', []))}")
+    if 'A_ub' in lp_matrices and lp_matrices['A_ub']:
+        key_parts.append(f"A_ub:{len(lp_matrices['A_ub'])}x{len(lp_matrices['A_ub'][0])}")
+    
+    return "|".join(key_parts)
+
+
+def get_cached_solution(cache_key: str) -> Optional[Dict[str, Any]]:
+    """
+    Get cached LP solution if available.
+    
+    Args:
+        cache_key: Cache key string
+        
+    Returns:
+        Cached solution dictionary or None if not found
+    """
+    global _cache_hits, _cache_misses
+    
+    if cache_key in _lp_cache:
+        _cache_hits += 1
+        return _lp_cache[cache_key]
+    
+    _cache_misses += 1
+    return None
+
+
+def cache_solution(cache_key: str, solution: Dict[str, Any]) -> None:
+    """
+    Cache LP solution.
+    
+    Args:
+        cache_key: Cache key string
+        solution: LP solution dictionary
+    """
+    global _lp_cache
+    
+    # Only cache successful solutions
+    if solution.get('success', False):
+        # Limit cache size to prevent memory issues
+        if len(_lp_cache) > 100:
+            # Remove oldest entry (FIFO)
+            oldest_key = next(iter(_lp_cache))
+            del _lp_cache[oldest_key]
+        
+        _lp_cache[cache_key] = solution.copy()
+        
+        # Print cache statistics occasionally
+        total = _cache_hits + _cache_misses
+        if total > 0 and total % 10 == 0:
+            hit_rate = (_cache_hits / total) * 100
+            print(f"[LP CACHE] Hits: {_cache_hits}, Misses: {_cache_misses}, Hit rate: {hit_rate:.1f}%")
+
+
+# ============================================================================
 # DATABASE OPERATIONS
 # ============================================================================
 
@@ -269,20 +480,49 @@ def generate_auto_mapping(formulas: Dict[str, str]) -> Dict[str, str]:
     # Only keep identifiers that are not function names
     column_identifiers = all_identifiers - function_names
     
+    # Ignore LP decision variables (not DB columns)
+    LP_RESERVED_IDENTIFIERS = {
+        "x", "r", "r0", "optimal_x", "optimal_r", "optimal_value", "lp_status",
+        "x0_j", "X0_j", "X0_J",  # Vector variable for LP formulas
+        "cm_j", "CM_J",  # Contribution margin vector
+        "safe_x_min", "SAFE_X_MIN",  # LP constraint results
+        "safe_x_max", "SAFE_X_MAX",  # LP constraint results
+        "constraint_lp", "CONSTRAINT_LP",  # LP constraint formula
+        "bounds", "BOUNDS"  # LP bounds
+    }
+    
+    # DSL keywords that should not be treated as database columns
+    DSL_KEYWORDS = {
+        "VECTOR", "DECISION", "OBJECTIVE", "BOUND", "DOT", "NORM"
+    }
+    
+    column_identifiers = {
+        ident for ident in column_identifiers
+        if ident not in LP_RESERVED_IDENTIFIERS
+    }
+    
+    # Filter out DSL keywords (case-insensitive)
+    filtered_identifiers = set()
+    for ident in column_identifiers:
+        if ident.upper() in DSL_KEYWORDS:
+            print(f"[INFO] DSL keyword ignored in SQL column detection: {ident}")
+        else:
+            filtered_identifiers.add(ident)
+    
     # Create mapping: identifier -> identifier (same name)
-    return {ident: ident for ident in sorted(column_identifiers)}
+    return {ident: ident for ident in sorted(filtered_identifiers)}
 
 
 def execute_lp_optimization(
-    scenario_context: Dict[str, Any],
-    formulas: Dict[str, str]
+    scenario_formulas: Dict[str, str],
+    scenario_context: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Execute LP optimization if LP formulas are detected.
     
     Args:
+        scenario_formulas: Scenario-level formulas (target:expression)
         scenario_context: Current scenario context with vector data
-        formulas: All formulas in the scenario
         
     Returns:
         Updated scenario context with LP optimization results
@@ -291,55 +531,135 @@ def execute_lp_optimization(
         print("[INFO] LP optimization modules not available, skipping LP optimization")
         return scenario_context
     
+    # Check for unsafe formulas
+    unsafe_formulas = check_unsafe_formulas(scenario_formulas)
+    if unsafe_formulas:
+        print(f"[WARN] Unsafe formulas detected and rejected: {unsafe_formulas}")
+        scenario_context['lp_status'] = 'INVALID_MODEL'
+        scenario_context['_lp_error'] = {'message': f'Unsafe formulas: {unsafe_formulas}', 'success': False}
+        return scenario_context
+    
     try:
         # Detect LP components in formulas
+        print("[LP] Detecting LP formulas...")
         parser = LPModelParser()
-        lp_spec = parser.detect_lp_formulas(formulas)
+        lp_spec = parser.detect_lp_formulas(scenario_formulas)
         
         if not lp_spec['is_lp_problem']:
-            print("[INFO] No LP problem detected in formulas")
+            print("[LP] No LP formulas detected")
             return scenario_context
         
-        print(f"[LP OPTIMIZATION] LP problem detected with variables: {lp_spec['variables']}")
-        print(f"[LP OPTIMIZATION] Objective: {lp_spec['objective']}")
-        print(f"[LP OPTIMIZATION] Constraints: {lp_spec['constraints']}")
-        print(f"[LP OPTIMIZATION] Bounds: {lp_spec['bounds']}")
+        print(f"[LP] LP formulas detected with variables: {lp_spec['variables']}")
+        print(f"[LP] Objective: {lp_spec['objective']}")
+        print(f"[LP] Constraints: {lp_spec['constraints']}")
+        print(f"[LP] Bounds: {lp_spec['bounds']}")
         
         # Build LP matrices
+        print("[LP] Building LP matrices...")
         builder = LPMatrixBuilder(scenario_context)
-        lp_matrices = builder.build_from_formulas(formulas, lp_spec)
+        lp_matrices = builder.build_from_formulas(scenario_formulas, lp_spec)
         
-        print(f"[LP OPTIMIZATION] Built LP matrices:")
+        print(f"[LP] Built LP matrices:")
         print(f"  Variables: {lp_matrices['variables']}")
-        print(f"  c vector: {lp_matrices['c']}")
+        print(f"  c vector length: {len(lp_matrices['c'])}")
         print(f"  A_ub shape: {len(lp_matrices['A_ub'])}x{len(lp_matrices['A_ub'][0]) if lp_matrices['A_ub'] else 0}")
         print(f"  b_ub length: {len(lp_matrices['b_ub'])}")
         
-        # Solve LP problem
-        solver = LPSolver()
-        result = solver.solve_from_matrices(lp_matrices, maximize=True)
+        # Check if we can reuse cached solution
+        cache_key = generate_cache_key(scenario_context, lp_matrices)
+        cached_result = get_cached_solution(cache_key)
         
-        print(f"[LP OPTIMIZATION] LP solution:")
+        if cached_result is not None:
+            print("[LP] Using cached LP solution")
+            result = cached_result
+        else:
+            # Solve LP problem
+            print("[LP] Solving LP problem...")
+            solver = LPSolver()
+            result = solver.solve_from_matrices(lp_matrices, maximize=True)
+            
+            # Cache the result
+            cache_solution(cache_key, result)
+        
+        print(f"[LP] Optimization result:")
         print(f"  Success: {result['success']}")
         print(f"  Message: {result['message']}")
         
+        # Set lp_status
         if result['success']:
-            # Add LP solution to scenario context
+            scenario_context['lp_status'] = 'OPTIMAL'
+            print(f"[LP] LP optimization completed successfully")
+        else:
+            scenario_context['lp_status'] = 'FAILED'
+            print(f"[LP] LP optimization failed: {result['message']}")
+        
+        # Add LP solution to scenario context
+        if result['success'] and result['x'] is not None:
+            # Add individual decision variables
             for i, var_name in enumerate(lp_matrices['variables']):
                 scenario_context[var_name] = result['x'][i]
                 print(f"  {var_name} = {result['x'][i]}")
             
+            # Add standardized optimal variables for common cases
+            # Extract x variables (vector decision variables)
+            x_vars = [var for var in lp_matrices['variables'] if var.startswith('x')]
+            if x_vars:
+                # Create optimal_x as a list of optimal values for x variables
+                optimal_x_values = []
+                for x_var in sorted(x_vars):
+                    idx = lp_matrices['variables'].index(x_var)
+                    optimal_x_values.append(result['x'][idx])
+                scenario_context['optimal_x'] = optimal_x_values
+                
+                # Create X0 vector for formula compatibility (X0_J in formulas)
+                # X0 is a vector with the same value repeated for each row
+                # This allows formulas like SAFE_X_MIN = X0_J - r0*(CM_J/CM_NORM)
+                if optimal_x_values:
+                    # For single x variable, create X0 vector with same value for all rows
+                    if len(optimal_x_values) == 1:
+                        x_value = optimal_x_values[0]
+                        # Create X0 vector with same value for all rows
+                        # We need to know how many rows there are
+                        # Look for any vector in scenario_context to get row count
+                        row_count = 0
+                        for key, value in scenario_context.items():
+                            if isinstance(value, list):
+                                row_count = len(value)
+                                break
+                        if row_count > 0:
+                            scenario_context['X0'] = [x_value] * row_count
+                            print(f"  X0 vector created with {row_count} elements, all = {x_value}")
+                    else:
+                        # For multiple x variables, use them as X0 vector
+                        scenario_context['X0'] = optimal_x_values
+                        print(f"  X0 vector = {optimal_x_values}")
+            
+            # Extract r variable (scalar decision variable)
+            r_vars = [var for var in lp_matrices['variables'] if var == 'r']
+            if r_vars:
+                r_idx = lp_matrices['variables'].index('r')
+                scenario_context['optimal_r'] = result['x'][r_idx]
+                # Also add as r0 for formula compatibility
+                scenario_context['r0'] = result['x'][r_idx]
+                print(f"  r0 = {result['x'][r_idx]}")
+            
             # Add objective value
-            if lp_spec['objective']:
-                scenario_context[lp_spec['objective']] = result['fun']
-                print(f"  Objective value = {result['fun']}")
+            if result['fun'] is not None:
+                scenario_context['optimal_value'] = result['fun']
+                print(f"  Optimal value = {result['fun']}")
             
             # Add solver information
             scenario_context['_lp_solution'] = result
-            print(f"[LP OPTIMIZATION] LP optimization completed successfully")
-        else:
-            print(f"[LP OPTIMIZATION] LP optimization failed: {result['message']}")
-            # Add error information to context
+            
+            # Ensure deterministic variable ordering for formulas
+            # Sort x variables to ensure consistent ordering
+            x_vars_sorted = sorted([var for var in lp_matrices['variables'] if var.startswith('x')])
+            for i, x_var in enumerate(x_vars_sorted):
+                # Also add x1, x2, x3 as individual variables if they exist
+                scenario_context[x_var] = result['x'][lp_matrices['variables'].index(x_var)]
+        
+        # Add error information if failed
+        if not result['success']:
             scenario_context['_lp_error'] = result
         
         return scenario_context
@@ -348,7 +668,9 @@ def execute_lp_optimization(
         print(f"[ERROR] LP optimization failed: {e}")
         import traceback
         traceback.print_exc()
-        # Return original context without LP results
+        # Set failure status and return original context
+        scenario_context['lp_status'] = 'FAILED'
+        scenario_context['_lp_error'] = {'message': str(e), 'success': False}
         return scenario_context
 
 
@@ -372,11 +694,17 @@ def classify_and_execute_formulas(
     # CVP-specific: F (fixed cost) is a scalar input
     SCALAR_INPUTS = {'F'}
     
-    # Step 1: Direct scenario seeds (formulas with DOT/NORM)
-    direct_scenario = set()
+    # Step 1: Identify DSL constructs and scenario-level formulas
+    scenario_targets = set()
+    dsl_targets = set()
+    
     for target, expr in formulas.items():
-        if detect_scenario_functions(expr):
-            direct_scenario.add(target)
+        # Check if this is a DSL construct or scenario-level formula
+        if is_scenario_level_formula(target, expr):
+            scenario_targets.add(target)
+            if is_dsl_construct(expr):
+                dsl_targets.add(target)
+                print(f"[DSL] Detected DSL construct: {target} = {expr}")
     
     # Step 2: Build dependency graph
     dep_graph = {}
@@ -392,9 +720,7 @@ def classify_and_execute_formulas(
         row_refs -= SCALAR_INPUTS
         return len(row_refs) > 0
     
-    # Step 4: Identify ALL scenario formulas
-    scenario_targets = set(direct_scenario)
-    
+    # Step 4: Expand scenario targets based on dependencies
     changed = True
     while changed:
         changed = False
@@ -436,6 +762,8 @@ def classify_and_execute_formulas(
     print(f"[INFO] Scenario-level formulas ({len(scenario_formulas)}): {list(scenario_formulas.keys())}")
     print(f"[INFO] Phase 1 row formulas ({len(phase1_row_formulas)}): {list(phase1_row_formulas.keys())}")
     print(f"[INFO] Phase 3 row formulas ({len(phase3_row_formulas)}): {list(phase3_row_formulas.keys())}")
+    if dsl_targets:
+        print(f"[INFO] DSL constructs: {list(dsl_targets)}")
     
     # Build execution orders
     phase1_order = topo_sort({t: {d for d in extract_identifiers(e) if d in phase1_row_formulas} 
@@ -494,21 +822,68 @@ def classify_and_execute_formulas(
         
         SCALAR_VARS_IN_SCENARIO = {'F'}
         
+        # DSL keywords that should NOT be added to scenario context as scalars
+        DSL_KEYWORDS = {'VECTOR', 'DECISION', 'OBJECTIVE', 'BOUND', 'DOT', 'NORM'}
+        
+        # Detect LP decision variables from DSL constructs
+        lp_decision_vars = set()
+        if LP_AVAILABLE:
+            try:
+                parser = LPModelParser()
+                lp_spec = parser.detect_lp_formulas(scenario_formulas)
+                if lp_spec['is_lp_problem']:
+                    lp_decision_vars = set(lp_spec['variables'])
+                    print(f"[LP] Detected LP decision variables: {list(lp_decision_vars)}")
+            except Exception as e:
+                print(f"[WARNING] Failed to detect LP decision variables: {e}")
+        
+        # First pass: collect all variables from computed rows
         for var in all_scenario_vars:
+            # Skip DSL keywords - they are functions, not variables
+            if var.upper() in DSL_KEYWORDS:
+                print(f"[DSL] Skipping DSL keyword '{var}' in scenario context")
+                continue
+            
+            # Skip LP decision variables - they will be set by LP solver
+            if var in lp_decision_vars:
+                print(f"[LP] Skipping LP decision variable '{var}' in scenario context (will be set by LP solver)")
+                continue
+                
             if var in computed_rows[0] and var not in SCALAR_VARS_IN_SCENARIO:
                 # This is a row-level variable that becomes a VECTOR
                 vector = []
                 for row in computed_rows:
                     vector.append(row[var])
                 scenario_context[var] = vector
+                print(f"[SCENARIO VECTOR] Created vector for '{var}' with {len(vector)} values")
             else:
                 # This is a SCALAR variable
                 scenario_context[var] = all_rows[0].get(var, 0.0)
                 print(f"[SCENARIO CONTEXT] {var} = {scenario_context[var]} (treated as scalar)")
         
-        # Execute scenario formulas
+        # Second pass: automatically build vectors for all numeric columns
+        # This allows vector(CM_J) to work even if CM_J wasn't explicitly referenced
+        if computed_rows:
+            for key in computed_rows[0].keys():
+                # Skip DSL keywords
+                if key.upper() in DSL_KEYWORDS:
+                    continue
+                    
+                if key not in scenario_context and key not in SCALAR_VARS_IN_SCENARIO:
+                    values = [row.get(key) for row in computed_rows]
+                    # Check if all values are numeric (int/float)
+                    if all(isinstance(v, (int, float)) for v in values if v is not None):
+                        scenario_context[key] = values
+                        print(f"[SCENARIO VECTOR] Auto-created vector for '{key}' with {len(values)} values")
+        
+        # Execute scenario formulas (skip DSL constructs)
         scenario_results = {}
         for target in scenario_order:
+            # Skip DSL constructs - they are handled by LP model parser
+            if target in dsl_targets:
+                print(f"[DSL] Skipping execution of DSL construct: {target}")
+                continue
+                
             try:
                 val = run_formula(scenario_formulas[target], scenario_context, all_rows=all_rows)
                 scenario_context[target] = val
@@ -521,7 +896,7 @@ def classify_and_execute_formulas(
                 print(f"[ERROR] Scenario formula {target}: {error_msg}")
         
         # Execute LP optimization if LP formulas are detected
-        scenario_context = execute_lp_optimization(scenario_context, formulas)
+        scenario_context = execute_lp_optimization(scenario_formulas, scenario_context)
         
         # Update scenario_results with any LP optimization results
         for key, value in scenario_context.items():
@@ -532,10 +907,28 @@ def classify_and_execute_formulas(
         # PHASE 3: Propagation back to rows
         print("[PHASE 3] Propagating scenario results to rows...")
         
+        # Prepare per-row variables from LP solution
+        # If we have X0 vector from LP solution, create X0_J per row
+        if 'X0' in scenario_context and isinstance(scenario_context['X0'], list):
+            x0_vector = scenario_context['X0']
+            print(f"[LP PROPAGATION] X0 vector has {len(x0_vector)} elements")
+        
         for i, row in enumerate(computed_rows):
-            # Add scenario results to this row
+            # Add scenario results to this row (skip vectors)
             for target, value in scenario_results.items():
+                # Skip vector/list values - only scalars should be written to rows
+                if isinstance(value, (list, tuple)):
+                    print(f"[SKIP] Skipping vector '{target}' (type: {type(value).__name__}) for row propagation")
+                    continue
                 row[target] = value
+            
+            # Add per-row LP variables
+            # If X0 vector exists, add X0_J for this row
+            if 'X0' in scenario_context and isinstance(scenario_context['X0'], list):
+                x0_vector = scenario_context['X0']
+                if i < len(x0_vector):
+                    row['X0_J'] = x0_vector[i]
+                    print(f"[LP PROPAGATION] Row {row_ids[i]}: X0_J = {x0_vector[i]}")
             
             # Re-evaluate Phase 3 row formulas
             for target in phase3_order:
@@ -543,6 +936,10 @@ def classify_and_execute_formulas(
                 if any(dep in scenario_results for dep in deps):
                     try:
                         val = run_formula(phase3_row_formulas[target], row, all_rows=all_rows)
+                        # Skip vector/list values
+                        if isinstance(val, (list, tuple)):
+                            print(f"[SKIP] Skipping vector result for '{target}' in row {row_ids[i]}")
+                            continue
                         row[target] = val
                     except Exception as e:
                         error_msg = f"Propagation error: {e}"

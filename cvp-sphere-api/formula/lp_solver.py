@@ -112,39 +112,179 @@ class LPSolver:
                 "Install with: pip install scipy"
             )
         
-        # Convert inputs to numpy arrays
-        c_arr = np.asarray(c, dtype=float)
+        # Convert inputs to Python lists (fix for scipy interface issues)
+        c_list = list(c)
         
         # If maximizing, negate the objective coefficients (linprog minimizes)
         if maximize:
-            c_arr = -c_arr
+            c_list = [-x for x in c_list]
         
-        A_ub_arr = np.asarray(A_ub, dtype=float) if A_ub is not None else None
-        b_ub_arr = np.asarray(b_ub, dtype=float) if b_ub is not None else None
-        A_eq_arr = np.asarray(A_eq, dtype=float) if A_eq is not None else None
-        b_eq_arr = np.asarray(b_eq, dtype=float) if b_eq is not None else None
+        # Convert A_ub to list of lists if provided
+        A_ub_list = None
+        if A_ub is not None:
+            A_ub_list = [list(row) for row in A_ub]
         
-        # Validate dimensions
-        self._validate_problem_dimensions(
-            c_arr, A_ub_arr, b_ub_arr, A_eq_arr, b_eq_arr, bounds
+        # Convert b_ub to list if provided
+        b_ub_list = list(b_ub) if b_ub is not None else None
+        
+        # Convert A_eq to list of lists if provided
+        A_eq_list = None
+        if A_eq is not None:
+            A_eq_list = [list(row) for row in A_eq]
+        
+        # Convert b_eq to list if provided
+        b_eq_list = list(b_eq) if b_eq is not None else None
+        
+        # Validate dimensions before solving
+        validation_result = self._validate_inputs(
+            c_list, A_ub_list, b_ub_list, A_eq_list, b_eq_list, bounds
         )
+        if validation_result is not None:
+            return validation_result
         
         # Solve the linear programming problem
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            result = linprog(
-                c=c_arr,
-                A_ub=A_ub_arr,
-                b_ub=b_ub_arr,
-                A_eq=A_eq_arr,
-                b_eq=b_eq_arr,
-                bounds=bounds,
-                method=self.method,
-                options=self.options
-            )
+            try:
+                result = linprog(
+                    c=c_list,
+                    A_ub=A_ub_list,
+                    b_ub=b_ub_list,
+                    A_eq=A_eq_list,
+                    b_eq=b_eq_list,
+                    bounds=bounds,
+                    method="highs",  # Explicitly set method for stability
+                    options=self.options
+                )
+            except Exception as e:
+                # Return failure result instead of crashing
+                return {
+                    'success': False,
+                    'x': None,
+                    'fun': None,
+                    'message': f'Linprog error: {str(e)}',
+                    'status': -1,
+                    'iterations': 0,
+                    'slack': None,
+                    'con': None,
+                    'solver_info': {'error': str(e)}
+                }
         
         # Format the result
         return self._format_result(result, maximize)
+    
+    def _validate_inputs(
+        self,
+        c_list: List[float],
+        A_ub_list: Optional[List[List[float]]],
+        b_ub_list: Optional[List[float]],
+        A_eq_list: Optional[List[List[float]]],
+        b_eq_list: Optional[List[float]],
+        bounds: Optional[Bounds]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate LP problem inputs before solving.
+        
+        Args:
+            c_list: Objective coefficients
+            A_ub_list: Inequality constraint matrix
+            b_ub_list: Inequality constraint vector
+            A_eq_list: Equality constraint matrix
+            b_eq_list: Equality constraint vector
+            bounds: Variable bounds
+            
+        Returns:
+            Failure result dictionary if validation fails, None if validation passes
+        """
+        # Check objective coefficients
+        if not c_list:
+            return {
+                'success': False,
+                'x': None,
+                'fun': None,
+                'message': 'Empty objective coefficients',
+                'status': -1,
+                'iterations': 0,
+                'slack': None,
+                'con': None,
+                'solver_info': {'validation_error': 'empty_objective'}
+            }
+        
+        n_vars = len(c_list)
+        
+        # Check bounds dimension
+        if bounds is not None and len(bounds) != n_vars:
+            return {
+                'success': False,
+                'x': None,
+                'fun': None,
+                'message': f'Bounds dimension mismatch: bounds has {len(bounds)} elements, expected {n_vars}',
+                'status': -1,
+                'iterations': 0,
+                'slack': None,
+                'con': None,
+                'solver_info': {'validation_error': 'bounds_dimension_mismatch'}
+            }
+        
+        # Check inequality constraints
+        if A_ub_list is not None and b_ub_list is not None:
+            if len(A_ub_list) != len(b_ub_list):
+                return {
+                    'success': False,
+                    'x': None,
+                    'fun': None,
+                    'message': f'A_ub rows ({len(A_ub_list)}) != b_ub length ({len(b_ub_list)})',
+                    'status': -1,
+                    'iterations': 0,
+                    'slack': None,
+                    'con': None,
+                    'solver_info': {'validation_error': 'inequality_constraint_dimension_mismatch'}
+                }
+            
+            for i, row in enumerate(A_ub_list):
+                if len(row) != n_vars:
+                    return {
+                        'success': False,
+                        'x': None,
+                        'fun': None,
+                        'message': f'A_ub row {i} has {len(row)} columns, expected {n_vars}',
+                        'status': -1,
+                        'iterations': 0,
+                        'slack': None,
+                        'con': None,
+                        'solver_info': {'validation_error': 'inequality_constraint_column_mismatch'}
+                    }
+        
+        # Check equality constraints
+        if A_eq_list is not None and b_eq_list is not None:
+            if len(A_eq_list) != len(b_eq_list):
+                return {
+                    'success': False,
+                    'x': None,
+                    'fun': None,
+                    'message': f'A_eq rows ({len(A_eq_list)}) != b_eq length ({len(b_eq_list)})',
+                    'status': -1,
+                    'iterations': 0,
+                    'slack': None,
+                    'con': None,
+                    'solver_info': {'validation_error': 'equality_constraint_dimension_mismatch'}
+                }
+            
+            for i, row in enumerate(A_eq_list):
+                if len(row) != n_vars:
+                    return {
+                        'success': False,
+                        'x': None,
+                        'fun': None,
+                        'message': f'A_eq row {i} has {len(row)} columns, expected {n_vars}',
+                        'status': -1,
+                        'iterations': 0,
+                        'slack': None,
+                        'con': None,
+                        'solver_info': {'validation_error': 'equality_constraint_column_mismatch'}
+                    }
+        
+        return None
     
     def solve_from_matrices(
         self,
